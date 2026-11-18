@@ -1,0 +1,42 @@
+{
+  "Models": [
+    { "Key": "large-v3-turbo-q8_0", "Name": "Whisper large-v3-turbo (8-bit)", "File": "ggml-large-v3-turbo-q8_0.bin", "Bytes": 874188075,
+      "Sha256": "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1",
+      "Url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q8_0.bin" },
+    { "Key": "medium", "Name": "Whisper medium", "File": "ggml-medium.bin", "Bytes": 1533763059,
+      "Sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+      "Url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-medium.bin" },
+    { "Key": "base", "Name": "Whisper base", "File": "ggml-base.bin", "Bytes": 147951465,
+      "Sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+      "Url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin" },
+    { "Key": "large-v3", "Name": "Whisper large-v3", "File": "ggml-large-v3.bin", "Bytes": 3095033483,
+      "Sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+      "Url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3.bin" },
+    { "Key": "silero-v6.2.0", "Name": "Silero voice detection v6.2.0", "File": "ggml-silero-v6.2.0.bin", "Bytes": 885098,
+      "Sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+      "Url": "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin" },
+    { "Key": "qwen3-4b", "Name": "Qwen3-4B (4-bit)", "File": "Qwen3-4B-Q4_K_M.gguf", "Bytes": 2497280256,
+      "Sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+      "Url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf?download=true" },
+    { "Key": "qwen3.5-4b", "Name": "Qwen3.5-4B (4-bit)", "File": "Qwen3.5-4B-Q4_K_M.gguf", "Bytes": 2740937888,
+      "Sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "Url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf?download=true" }
+  ],
+  "Runtimes": [
+    { "Key": "whisper-cuda12", "Name": "whisper.cpp v1.9.2, CUDA build", "File": "whisper-cublas-12.4.0-bin-x64.zip", "Bytes": 670611449,
+      "Sha256": "443110ddaad70d4290ab2e77179e31cf712035bbc4fad56bb4519a90c917b39c",
+      "Url": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-cublas-12.4.0-bin-x64.zip" },
+    { "Key": "whisper-cpu", "Name": "whisper.cpp v1.9.2, processor build", "File": "whisper-bin-x64.zip", "Bytes": 8194445,
+      "Sha256": "49dcc16de826f20bd53d44f947a1ae49dfa81f86cad67a64d80820cb192d674a",
+      "Url": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip" },
+    { "Key": "llama-cuda12", "Name": "llama.cpp b11577, CUDA build", "File": "llama-b11577-bin-win-cuda-12.4-x64.zip", "Bytes": 265226400,
+      "Sha256": "24f5885d2d67b9a61da5f9dcde93d74ae3820b4bb4fcaa738f29f7ab4ba7436c",
+      "Url": "https://github.com/ggml-org/llama.cpp/releases/download/b11577/llama-b11577-bin-win-cuda-12.4-x64.zip" },
+    { "Key": "llama-cudart12", "Name": "CUDA 12.4 runtime for llama.cpp", "File": "cudart-llama-bin-win-cuda-12.4-x64.zip", "Bytes": 391443627,
+      "Sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+      "Url": "https://github.com/ggml-org/llama.cpp/releases/download/b11577/cudart-llama-bin-win-cuda-12.4-x64.zip" },
+    { "Key": "llama-cpu", "Name": "llama.cpp b11577, processor build", "File": "llama-b11577-bin-win-cpu-x64.zip", "Bytes": 19509426,
+      "Sha256": "c48e5762bb466a2faba1b880ca8b328a152e7f48e738431eb918ac9078f82ef1",
+      "Url": "https://github.com/ggml-org/llama.cpp/releases/download/b11577/llama-b11577-bin-win-cpu-x64.zip" }
+  ]
+}

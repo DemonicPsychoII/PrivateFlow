@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+.vs/
+artifacts/
+runtime/
+*.user
+*.wav
+*.log
+*.partial
+settings.json
+**/__pycache__/
