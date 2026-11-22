@@ -30,6 +30,23 @@ static class JobSelectionChecks
             .Concat(JobSelection.RulesOf(root).SelectMany(rule => rule.Paths.Select(pattern => ("rule " + rule.Name, pattern))));
         var unmatched = Unmatched(patterns, tracked);
         Check(unmatched.Count == 0, $"every path of the selection tables matches a tracked file (matching nothing: {string.Join(", ", unmatched.DefaultIfEmpty("none"))})");
+        // A public snapshot leaves out public-snapshot/, the development workflows, the paths of its exclude.txt and with them the internal
+        // suites' *.selection.json, and its only workflows are the files of public-snapshot/workflows, in .github/workflows. The tables in the
+        // code must hold there too, as the release workflow runs these checks in the snapshot.
+        var excludeList = Path.Combine(root, "public-snapshot", "exclude.txt");
+        if (File.Exists(excludeList))
+        {
+            var leftOut = File.ReadAllLines(excludeList).Select(line => line.Trim()).Where(line => line.Length > 0 && !line.StartsWith('#'))
+                .Append("public-snapshot").Append(".github/workflows").ToList();
+            var publicWorkflows = tracked.Where(file => file.StartsWith("public-snapshot/workflows/") && !file["public-snapshot/workflows/".Length..].Contains('/'))
+                .Select(file => ".github/workflows/" + file["public-snapshot/workflows/".Length..]);
+            var snapshotFiles = tracked.Where(file => !leftOut.Any(path => file == path || file.StartsWith(path + "/"))).Concat(publicWorkflows).ToList();
+            var snapshotPatterns = JobSelection.Everything.Select(pattern => ("everything", pattern))
+                .Concat(JobSelection.Scans.SelectMany(scan => scan.Paths.Select(pattern => ("scan " + scan.Group, pattern))))
+                .Concat(JobSelection.Rules.SelectMany(rule => rule.Paths.Select(pattern => ("rule " + rule.Name, pattern))));
+            var unmatchedInSnapshot = Unmatched(snapshotPatterns, snapshotFiles);
+            Check(unmatchedInSnapshot.Count == 0, $"every path of the tables in the code matches a file a public snapshot keeps (matching nothing: {string.Join(", ", unmatchedInSnapshot.DefaultIfEmpty("none"))})");
+        }
         Check(Unmatched([("rule example", "scripts/no-such-script.ps1")], tracked).Count == 1, "a table path that matches no tracked file is reported");
         Check(JobSelection.Scans.All(scan => index.Groups.Any(group => group.Name == scan.Group)), "every scanning group of the table is a group of Program.cs");
 

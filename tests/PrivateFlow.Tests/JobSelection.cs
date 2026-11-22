@@ -74,7 +74,7 @@ static class JobSelection
         // Checked by the pure checks and CI's build.sh, or run by full-eval.ps1 on demand; no engine or desktop job runs them.
         new("no engine or desktop job", ["scripts/full-eval.ps1", "scripts/package.py", "scripts/release.py", "scripts/release_test.py", "scripts/sign-checksums.py",
             "scripts/install.ps1", "scripts/uninstall.ps1", "scripts/uninstall-test.ps1", "scripts/setup-rewrite.ps1",
-            "scripts/export-public.ps1", "scripts/publish-public.ps1", "public-snapshot/workflows/**", ".gitignore", ".gitattributes", "THIRD_PARTY_NOTICES.sha256", "assets/**",
+            "scripts/export-public.ps1", "scripts/publish-public.ps1", ".gitignore", ".gitattributes", "THIRD_PARTY_NOTICES.sha256", "assets/**",
             "tests/PrivateFlow.Tests/**"], []),
     ];
 
