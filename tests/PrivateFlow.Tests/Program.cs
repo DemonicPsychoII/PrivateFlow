@@ -1,5 +1,6 @@
 using static Harness;
 if (args is ["--notes-report", ..]) { NotesReport.Run(args[1..]); return 0; }
+if (args is ["--select-jobs", var selectionInput, var selectionOutput]) return JobSelection.Run(selectionInput, selectionOutput);
 Configure(args);
 
 Group("insertion-policy", DictationChecks.VerifyInsertionPolicy);
@@ -14,6 +15,8 @@ Group("notice-keys-documented", NoticeChecks.VerifyNoticeKeysDocumented);
 Group("release-version", ReleaseChecks.VerifyReleaseVersion);
 Group("publication-leaks", PublicationChecks.VerifyTrackedFiles);
 Group("public-export", PublicationChecks.VerifyExport);
+Group("public-publish", PublicationChecks.VerifyPublishDryRun);
+Group("dependency-exemption", PublicationChecks.VerifyDependencyExemption);
 Group("evaluation-encoding", ScriptChecks.VerifyEvaluationEncoding);
 await Group("release-updates", UpdateChecks.VerifyReleaseUpdates);
 Group("update-installer", UpdateChecks.VerifyInstaller);
@@ -36,6 +39,7 @@ Group("echo-removal", AudioChecks.VerifyEchoRemoval);
 Group("profiles-apply", SettingsChecks.VerifyProfilesApply);
 Group("meeting-archive", MeetingArchiveChecks.VerifyMeetingArchive);
 await Group("concise-client", OutputStyleChecks.VerifyConciseClient);
+await Group("concise-timeout", OutputStyleChecks.VerifyConciseTimeout);
 await Group("model-notes", ModelNotesChecks.VerifyModelNotes);
 Group("notes-language-and-setup", ModelNotesChecks.VerifyNotesLanguageAndSetup);
 await Group("gpu-memory-wait", ModelNotesChecks.VerifyGpuMemoryWait);
@@ -53,6 +57,12 @@ await Group("gpu-memory-and-final-pass", ModelNotesChecks.VerifyGpuMemoryAndFina
 Group("progress-and-differences", NoticeChecks.VerifyProgressAndDifferences);
 Group("archive-helpers", MeetingArchiveChecks.VerifyArchiveHelpers);
 Group("archive-audio", MeetingArchiveChecks.VerifyArchiveAudio);
+Group("archive-links", MeetingArchiveChecks.VerifyArchiveLinks);
 Group("vocabulary-library-file", VocabularyChecks.VerifyVocabularyLibraryFile);
 Group("profile-matching", SettingsChecks.VerifyProfileMatching);
+Group("audio-library", LibraryAudioChecks.VerifyAudioLibrary);
+await Group("audio-windows", LibraryAudioChecks.VerifyAudioWindows);
+Group("verification-outside-the-app", VerificationHostChecks.VerifyVerificationOutsideTheApp);
+Group("theme-resources", ThemeChecks.VerifyThemeResources);
+Group("job-selection", JobSelectionChecks.VerifyJobSelection);
 return Finish();

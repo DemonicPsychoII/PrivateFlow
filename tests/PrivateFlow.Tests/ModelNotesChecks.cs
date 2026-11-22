@@ -164,10 +164,11 @@ static class ModelNotesChecks
                     Path.Combine(setupRoot, "models", "ggml-large-v3-turbo.bin.partial"), Path.Combine(setupRoot, "downloads", "whisper-blas-bin-x64.zip.partial"),
                     Path.Combine(setupRoot, "downloads", "llama-b11577-bin-win-cpu-x64.zip.partial"), Path.Combine(setupRoot, "downloads", "other.range")];
                 foreach (var file in leftovers.Concat(kept)) File.WriteAllText(file, "x");
-                PrivateFlow.Windows.MeetingNotesModel.RemovePartialDownloads(setupRoot, nvidiaGpu: true);
-                PrivateFlow.Windows.MeetingNotesModel.RemovePartialDownloads(Path.Combine(setupRoot, "missing"), nvidiaGpu: true);
+                var notesModel = PrivateFlow.Windows.ModelList.Find(ModelCatalogue.NotesModel);
+                PrivateFlow.Windows.ModelList.RemovePartialDownloads(setupRoot, notesModel, nvidiaGpu: true);
+                PrivateFlow.Windows.ModelList.RemovePartialDownloads(Path.Combine(setupRoot, "missing"), notesModel, nvidiaGpu: true);
                 var processorBuildKept = File.Exists(Path.Combine(setupRoot, "downloads", "llama-b11577-bin-win-cpu-x64.zip.partial"));
-                PrivateFlow.Windows.MeetingNotesModel.RemovePartialDownloads(setupRoot, nvidiaGpu: false);
+                PrivateFlow.Windows.ModelList.RemovePartialDownloads(setupRoot, notesModel, nvidiaGpu: false);
                 Check(!leftovers.Any(File.Exists) && processorBuildKept && kept.Where(file => !file.EndsWith("cpu-x64.zip.partial")).All(File.Exists)
                     && !File.Exists(Path.Combine(setupRoot, "downloads", "llama-b11577-bin-win-cpu-x64.zip.partial")),
                     "a cancelled notes model install removes only its own partial downloads and keeps every verified file and the partial downloads of another setup");

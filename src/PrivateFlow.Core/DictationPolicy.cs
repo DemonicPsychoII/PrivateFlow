@@ -3,8 +3,60 @@ using System.Text.RegularExpressions;
 
 namespace PrivateFlow.Core;
 
-// Safe means "not a password field and not Private Flow itself"; any other field may receive a paste.
-public readonly record struct FocusTarget(nint Window, nint Control, uint Process, bool Safe, string? AccessibleId = null);
+// Whether the focused field is a password field: known either way, or unknown when neither UI Automation nor the Win32 edit
+// control could say.
+public enum PasswordField { No, Yes, Unknown }
+
+// Safe means "a window is in front, it is not Private Flow itself, and its field is known not to be a password field"; any such
+// field may receive a paste. A field whose kind is unknown gets the text on the clipboard instead, with the reason.
+public readonly record struct FocusTarget(nint Window, nint Control, uint Process, bool OwnWindow, PasswordField Password, string? AccessibleId = null)
+{
+    public bool Safe => Window != 0 && !OwnWindow && Password == PasswordField.No;
+}
+
+public static class PasswordFields
+{
+    // UI Automation's answer and the Win32 edit control's: a password field by either is one; otherwise one that says it is not decides.
+    // An edit control that did not answer in time is hung or busy: then nothing is known.
+    public static PasswordField Combine(PasswordField automation, PasswordField editControl, bool editControlTimedOut = false) =>
+        editControlTimedOut ? PasswordField.Unknown
+        : automation == PasswordField.Yes || editControl == PasswordField.Yes ? PasswordField.Yes
+        : automation == PasswordField.No || editControl == PasswordField.No ? PasswordField.No : PasswordField.Unknown;
+
+    // The answers are about the field in front before the probes, which ask other processes and take time; when the foreground window,
+    // its focused control or its process differ after them, they are about another field, so nothing is known.
+    public static FocusTarget Settle(FocusTarget classified, FocusTarget after) =>
+        DictationPolicy.SameFocus(classified, after) ? classified : classified with { Password = PasswordField.Unknown };
+
+    // A Win32 edit or rich edit control says through its ES_PASSWORD style (0x20) and its EM_GETPASSWORDCHAR answer, null when it gave
+    // none in time; any other window class cannot say.
+    public static PasswordField FromEditControl(string className, long style, int? passwordCharacter) =>
+        !IsEditControl(className) ? PasswordField.Unknown
+        : (style & 0x20) != 0 || passwordCharacter is > 0 ? PasswordField.Yes
+        : passwordCharacter is null ? PasswordField.Unknown : PasswordField.No;
+
+    // Edit, the RichEdit classes (RichEdit20W, RICHEDIT50W, RichEditD2DPT) and the Windows Forms ones (WindowsForms10.EDIT.app…).
+    public static bool IsEditControl(string className) =>
+        className.Equals("Edit", StringComparison.OrdinalIgnoreCase) || className.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase)
+        || (className.StartsWith("WindowsForms10.", StringComparison.OrdinalIgnoreCase)
+            && (className.Contains(".EDIT.", StringComparison.OrdinalIgnoreCase) || className.Contains(".RichEdit", StringComparison.OrdinalIgnoreCase)));
+}
+
+// What a copy of the clipboard taken before a paste holds: nothing, everything it offered, or not all of it, because the clipboard
+// stayed locked through the retries or a format could not be read.
+public enum ClipboardCopy { Empty, Complete, Incomplete }
+
+public static class ClipboardSnapshot
+{
+    // formatsRead holds, for every format the clipboard offered, whether its data was read and was not null. No format is exempt: one
+    // whose data cannot be read now, such as a delay-rendered or owner-display format, could not be restored either, so the clipboard
+    // counts as not saved and nothing replaces it.
+    public static ClipboardCopy Classify(bool opened, IReadOnlyCollection<bool> formatsRead) =>
+        !opened || formatsRead.Any(read => !read) ? ClipboardCopy.Incomplete : formatsRead.Count == 0 ? ClipboardCopy.Empty : ClipboardCopy.Complete;
+    // Only a clipboard saved completely, or an empty one, is replaced for a paste and restored after it; one that could not be saved is
+    // never replaced, not even by the copy left when a paste fails.
+    public static bool AllowsPaste(ClipboardCopy copy) => copy != ClipboardCopy.Incomplete;
+}
 
 // A monotonically increasing session ID rejects results that arrive after cancellation
 // or after another recording started. The paste goes to the window selected at start:
@@ -28,6 +80,25 @@ public sealed class DictationPolicy
         current.Window == target.Window && current.Process == target.Process &&
         !modifiersDown && !string.IsNullOrWhiteSpace(text);
     public void Complete(long session) { if (IsCurrent(session)) active = false; }
+
+    // A paste rests on one observation: the window, focused control and process classified must still be in front right before Ctrl+V.
+    public static bool SameFocus(FocusTarget classified, FocusTarget now) =>
+        classified.Window == now.Window && classified.Control == now.Control && classified.Process == now.Process;
+    // Right before Ctrl+V also the accessibility element: a browser draws its text and password fields in one window and one
+    // control, so only the element tells a move from the checked field into a password field beside it.
+    public static bool SameElement(FocusTarget classified, FocusTarget now, string? nowElement) =>
+        SameFocus(classified, now) && classified.AccessibleId == nowElement;
+
+    // Why a dictation was not pasted, for its notice: selected is the target read at the start, now the one read after the attempt.
+    public static string NotPastedReason(FocusTarget selected, FocusTarget now, bool clipboardUnreadable)
+    {
+        var same = now.Window == selected.Window;
+        if (clipboardUnreadable) return "the clipboard could not be saved";
+        if (selected.Window == 0) return "no window was in front at the start";
+        if (selected.OwnWindow || selected.Password == PasswordField.Yes || (same && (now.OwnWindow || now.Password == PasswordField.Yes))) return "password field or Private Flow itself";
+        if (selected.Password == PasswordField.Unknown || (same && now.Password == PasswordField.Unknown)) return "could not check whether this is a password field";
+        return same ? "Windows blocked the paste" : "the selected window is no longer in front";
+    }
 }
 
 public enum OutputStyle { Exact, Clean, Concise, LocalPolish }

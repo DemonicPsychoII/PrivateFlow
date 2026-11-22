@@ -10,6 +10,7 @@ public sealed record MeetingNotesResult(string Text, bool Written, int Dropped, 
 
 // The pinned model the Local model notes style downloads, Qwen3.5-4B Q4_K_M (Apache-2.0), chosen in the notes evaluation of 2026-11-17
 // (docs/VALIDATION.md). Its setup is optional: the History page can offer it with its size, and nothing is downloaded before the user asks.
+// It installs like every other model, through Settings → Models (WorkspacePages.SetupAsync, setup-rewrite.ps1 -Part notes).
 // With 32,768 tokens of context it took about 3.9 GB of GPU memory, leaving room for the speech recognition model beside it.
 public static class MeetingNotesModel
 {
@@ -18,18 +19,6 @@ public static class MeetingNotesModel
     // The model and llama.cpp: the CUDA build and its runtime on a PC with an NVIDIA GPU, otherwise the processor build.
     public static long DownloadBytes => ModelCatalogue.Model(ModelCatalogue.NotesModel).Bytes + ModelCatalogue.LlamaRuntimes(true, SpeechSetup.HasNvidiaGpu).Sum(runtime => runtime.Bytes);
     public static bool IsInstalled(Settings settings) => File.Exists(settings.MeetingNotesEnginePath) && File.Exists(settings.MeetingNotesModelPath);
-    // Returns null on success, otherwise a message for the user; the installed paths are stored without saving other unsaved choices.
-    // progress hears each step the setup script reports, such as "Local model download: 42%".
-    public static async Task<string?> InstallAsync(Settings settings, CancellationToken cancellation, IProgress<string>? progress = null)
-    {
-        try { return (await SpeechSetup.InstallAsync(settings, "setup-rewrite.ps1", ["-Part", "notes"], cancellation, progress)).Error; }
-        catch (OperationCanceledException) { RemovePartialDownloads(Settings.Root, SpeechSetup.HasNvidiaGpu); throw; }
-    }
-    // A cancelled setup leaves the download it was writing, up to the whole model; it is never used, and the next try starts it again.
-    // Only the files the notes setup fetches go, by name: partial downloads of other files stay. A partial llama.cpp archive of the
-    // same name left by the Local polish setup goes too; either setup would have continued that same file.
-    public static void RemovePartialDownloads(string dataRoot, bool nvidiaGpu) =>
-        ModelFiles.RemovePartialDownloads(dataRoot, ModelCatalogue.Model(ModelCatalogue.NotesModel), ModelCatalogue.LlamaRuntimes(true, nvidiaGpu));
 }
 
 // Notes in the style chosen in Settings. LocalModel keeps everything on this PC; Api sends the transcript text of one meeting in one

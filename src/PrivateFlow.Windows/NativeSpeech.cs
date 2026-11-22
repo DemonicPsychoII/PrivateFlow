@@ -38,7 +38,7 @@ internal sealed class NativeSpeech : IDisposable
         var loadBackend = Marshal.GetDelegateForFunctionPointer<LoadBackend>(NativeLibrary.GetExport(backendLibrary, "ggml_backend_load"));
         // ggml_backend_load_all_from_path maps every CPU variant just to score it, and Smart App Control
         // rates each unsigned file separately, so one unused variant can be blocked. Load only what runs.
-        TryLoadBackend(directory, "ggml-cuda.dll", loadBackend, out _);
+        var cudaLoaded = TryLoadBackend(directory, "ggml-cuda.dll", loadBackend, out _);
         LoadCpuBackend(directory, loadBackend);
         library = LoadRuntimeLibrary(System.IO.Path.Combine(directory, "whisper.dll"));
         var version = Marshal.PtrToStringUTF8(Export<Version>("whisper_version")());
@@ -56,7 +56,7 @@ internal sealed class NativeSpeech : IDisposable
         try
         {
             var parameters = Marshal.PtrToStructure<ContextParameters>(defaults);
-            parameters.UseGpu = directory.Contains("cuda", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0;
+            parameters.UseGpu = cudaLoaded ? (byte)1 : (byte)0;
             if (parameters.UseGpu == 1) CheckGpuMemory(directory, model, canFallBack);
             if (LowMemory is { } spilling) loadingWithLowMemory?.Invoke(spilling);
             context = Export<ContextInit>("whisper_init_from_file_with_params")(model, parameters);
@@ -225,7 +225,7 @@ internal sealed class NativeSpeech : IDisposable
         if (handle != 0) return handle;
         var file = System.IO.Path.GetFileName(path);
         throw new InvalidOperationException(SpeechRuntime.IsApplicationControlBlock(error) ? SpeechRuntime.BlockedMessage(file)
-            : $"Could not load {file} from the speech runtime: {new System.ComponentModel.Win32Exception(error).Message}");
+            : SpeechRuntime.LoadFailedMessage(file, error, new System.ComponentModel.Win32Exception(error).Message, SpeechSetup.VisualCppRuntimeInstalled));
     }
     private static nint TryLoadLibrary(string path, out int error)
     {

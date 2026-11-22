@@ -306,10 +306,68 @@ static class MeetingArchiveChecks
             Check(MeetingArchive.SilentChannels(new MeetingDocument { MicrophoneDevice = "Old", Chunks = [new() { File = "mic-000000.wav", Channel = "mic" }] }).Count == 0
                 && MeetingArchive.SilentChannels(new MeetingDocument { Chunks = [new() { File = "mic-000000.wav", Channel = "mic", Peak = 0 }] }).Count == 0,
                 "meetings saved before levels or devices were recorded are not reported as silent");
+            var gap = new MeetingDocument { Chunks = [new() { File = "mic-000000.wav", Channel = "mic", Duration = 20, Transcribed = true }, new() { File = "mic-000001.wav", Channel = "mic", Offset = 20, Duration = 19.2 },
+                new() { File = "mic-000002.wav", Channel = "mic", Offset = 40, Duration = 20 }] };
+            audioArchive.Save(gap); File.WriteAllBytes(audioArchive.ChunkPath(gap.Id, "mic-000002.wav"), [0]);
+            gap.MissingAudioSeconds = MeetingArchive.MissingAudioSeconds(gap, gap.Chunks.Where(chunk => File.Exists(audioArchive.ChunkPath(gap.Id, chunk.File))).ToHashSet());
+            Check(gap.MissingAudioSeconds == 19.2 && MeetingArchive.Notes(gap).StartsWith("20 s of the recorded audio was missing when the transcript was finished")
+                && !MeetingArchive.Caveats(new MeetingDocument()).Contains("missing"),
+                "audio missing at the final pass without a live preview is counted and named in the notes; missing audio with a preview is not");
+            gap.WrittenNotes = new() { Text = "Written by test-model. Summary\nWe ship.", Model = "test-model", Transcript = "" };
+            Check(MeetingHistory.Notes(gap).StartsWith("20 s of the recorded audio was missing") && MeetingHistory.ExportedNotes(gap).Contains("20 s of the recorded audio was missing")
+                && MeetingHistory.WithMissingAudio(gap, MeetingHistory.Notes(gap)) == MeetingHistory.Notes(gap),
+                "notes a model wrote before the gap was found show it before them and in exports, once");
             var old = new MeetingDocument(); audioArchive.Save(old);
             File.WriteAllText(Path.Combine(audioArchive.DirectoryFor(old.Id), "meeting.json"), "{\"Id\":\"" + old.Id + "\",\"Status\":\"Interrupted\",\"Chunks\":[{\"File\":\"mic-000000.wav\",\"Channel\":\"mic\",\"Offset\":0,\"Duration\":1}],\"Segments\":[]}");
             Check(audioArchive.Load(old.Id) is { MicrophoneDevice: "", PlaybackDevice: "" } loadedOld && loadedOld.Chunks[0].Peak is null, "a meeting record from an earlier version loads without devices and levels");
         }
         finally { Directory.Delete(audioRoot, true); }
+    }
+
+    // The archive never follows a link or junction out of its folder: deleting a meeting whose folder is, or holds, a link to
+    // somewhere else refuses and leaves that place alone. On Windows the link is a junction, which needs no administrator rights.
+    public static void VerifyArchiveLinks()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "PrivateFlow-archive-links-" + Guid.NewGuid().ToString("N"));
+        var outside = Path.Combine(Path.GetTempPath(), "PrivateFlow-outside-" + Guid.NewGuid().ToString("N"));
+        void Link(string link, string target)
+        {
+            if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(link, target); return; }
+            using var junction = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/d /c mklink /J \"{link}\" \"{target}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+            junction.WaitForExit();
+            if (junction.ExitCode != 0) throw new IOException("mklink /J failed.");
+        }
+        try
+        {
+            Directory.CreateDirectory(outside);
+            var kept = Path.Combine(outside, "keep.txt"); File.WriteAllText(kept, "outside the archive");
+            var archive = new MeetingArchive(root);
+            var linkedMeeting = Guid.NewGuid().ToString("N");
+            Link(archive.DirectoryFor(linkedMeeting), outside);
+            string? refusal = null;
+            try { archive.Delete(linkedMeeting); } catch (InvalidOperationException error) { refusal = error.Message; }
+            Check(refusal == "Meeting archive cannot follow links or junctions." && File.Exists(kept), "deleting a meeting whose folder is a link refuses and leaves the linked folder alone");
+            var nestedMeeting = Guid.NewGuid().ToString("N");
+            Directory.CreateDirectory(archive.DirectoryFor(nestedMeeting));
+            File.WriteAllText(Path.Combine(archive.DirectoryFor(nestedMeeting), "meeting.json"), "{}");
+            Link(Path.Combine(archive.DirectoryFor(nestedMeeting), "chunks"), outside);
+            refusal = null;
+            try { archive.Delete(nestedMeeting); } catch (InvalidOperationException error) { refusal = error.Message; }
+            Check(refusal is not null && File.Exists(kept) && File.Exists(Path.Combine(archive.DirectoryFor(nestedMeeting), "meeting.json")),
+                "deleting a meeting that holds a link refuses before deleting anything, inside or outside the archive");
+            var linkedRoot = root + "-link";
+            Link(linkedRoot, outside);
+            try { _ = new MeetingArchive(linkedRoot); Check(false, "an archive folder that is a link is refused"); }
+            catch (InvalidOperationException) { Check(File.Exists(kept), "an archive folder that is a link is refused"); }
+            finally { Directory.Delete(linkedRoot); }
+        }
+        finally
+        {
+            // The links go first, without following them, so removing the archive cannot reach the folder they point to.
+            foreach (var link in Directory.Exists(root) ? Directory.GetDirectories(root).SelectMany(meeting => Directory.GetDirectories(meeting).Prepend(meeting)).ToArray() : [])
+                if ((File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0) Directory.Delete(link);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            if (Directory.Exists(outside)) Directory.Delete(outside, true);
+        }
     }
 }

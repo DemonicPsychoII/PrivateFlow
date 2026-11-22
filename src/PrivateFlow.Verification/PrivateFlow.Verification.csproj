@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- PrivateFlow.Verification.exe: the workspace verification, the overlay and insertion checks, the diagnostic window and the evaluation
+       modes, run against the app's own assembly. Built beside the package (artifacts/verification) and never part of it. The app's
+       manifest, so its windows get the same process settings as in the app. -->
+  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><ApplicationManifest>../PrivateFlow.Windows/app.manifest</ApplicationManifest><AssemblyName>PrivateFlow.Verification</AssemblyName><RootNamespace>PrivateFlow.Verification</RootNamespace></PropertyGroup>
+  <!-- The app's version, so the host's identity is the app build's it was built with; Program refuses to run with any other. -->
+  <PropertyGroup><Version>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../PrivateFlow.Windows/PrivateFlow.Windows.csproj')), '&lt;Version&gt;([^&lt;]+)&lt;/Version&gt;').Groups[1].Value)</Version></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../PrivateFlow.Windows/PrivateFlow.Windows.csproj"/></ItemGroup>
+  <!-- The scripts the app finds beside itself, as in the package: the verification runs the real setup recommendation and setups. -->
+  <ItemGroup><None Include="../../scripts/setup-engine.ps1;../../scripts/setup-rewrite.ps1;../../scripts/settings-file.ps1;../../scripts/models.json;../../scripts/install.ps1;../../scripts/uninstall.ps1" Link="scripts/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/></ItemGroup>
+</Project>

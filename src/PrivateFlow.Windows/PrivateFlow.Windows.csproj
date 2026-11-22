@@ -1,8 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><ApplicationManifest>app.manifest</ApplicationManifest><AssemblyName>PrivateFlow</AssemblyName><Version>0.5.5</Version></PropertyGroup>
+  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><ApplicationManifest>app.manifest</ApplicationManifest><AssemblyName>PrivateFlow</AssemblyName><Version>0.5.22</Version></PropertyGroup>
   <!-- Shown in the exe's file properties and the Start-menu shortcut. Regenerate the icon with the export-icon option of PrivateFlow.exe. -->
   <PropertyGroup><ApplicationIcon>../../assets/PrivateFlow.ico</ApplicationIcon><Product>Private Flow</Product><AssemblyTitle>Private Flow</AssemblyTitle><Description>Private Flow voice dictation</Description><Company>Private Flow contributors</Company><Copyright>Copyright (c) 2026 Private Flow contributors</Copyright></PropertyGroup>
   <ItemGroup><ProjectReference Include="../PrivateFlow.Core/PrivateFlow.Core.csproj"/><PackageReference Include="NAudio" Version="2.2.1"/></ItemGroup>
+  <!-- The verification host drives the windows and controllers from outside; the package does not contain it. -->
+  <ItemGroup><InternalsVisibleTo Include="PrivateFlow.Verification"/></ItemGroup>
   <Target Name="CopyRuntimeNotices" AfterTargets="Publish" Condition="'$(SelfContained)' == 'true'">
     <ItemGroup>
       <RuntimeNotice Include="%(ResolvedRuntimePack.PackageDirectory)/LICENSE*;%(ResolvedRuntimePack.PackageDirectory)/THIRD-PARTY-NOTICES*"

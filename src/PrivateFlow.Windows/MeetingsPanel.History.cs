@@ -61,7 +61,14 @@ internal sealed partial class MeetingsPanel
     // The notes text as the Notes tab shows it, for the verification.
     private string notesShown = "";
     private readonly DispatcherTimer notesTimer = new() { Interval = TimeSpan.FromSeconds(1) };
-    // Stands in for the notes model in the verification, also in the window, so it never reaches a real model.
+    // The install of the meeting notes model, offered here while the Local model style lacks it and next to that style under Settings →
+    // Models; Settings → Models runs it. Nothing is downloaded before one of them is pressed; the setup script pins and verifies every download.
+    private readonly NotesModelInstall notesInstall;
+    private readonly Border notesModelMissing;
+    internal static string NotesInstallLabel => $"Install the meeting notes model ({SpeechRuntime.Gigabytes(MeetingNotesModel.DownloadBytes)} GB)";
+    private static string NotesInstallOffer =>
+        $"Install downloads Qwen3.5-4B and llama.cpp once, about {SpeechRuntime.Gigabytes(MeetingNotesModel.DownloadBytes)} GB, pinned and verified; nothing is downloaded before you press it.";
+    // Null asks the chosen notes model. The verification host sets a stand-in, so it never reaches a real model.
     internal Func<string, string, CancellationToken, Task<string>>? CompleteNotes { get; set; }
     private readonly Action openNotesSettings;
     private CancellationTokenSource? notesCancellation;
@@ -131,9 +138,10 @@ internal sealed partial class MeetingsPanel
         notesDestination.Margin = new(0, 6, 0, 0);
         // While the model installs, its progress stands next to Cancel installing in place of the description.
         var installLine = new DockPanel();
-        DockPanel.SetDock(installOnNotes.Button, Dock.Left); installOnNotes.Button.VerticalAlignment = VerticalAlignment.Center;
-        installOnNotes.Progress.Margin = new(16, 0, 0, 0); installOnNotes.Progress.VerticalAlignment = VerticalAlignment.Center;
-        installLine.Children.Add(installOnNotes.Button); installLine.Children.Add(installOnNotes.Progress);
+        var (installButton, installProgress) = notesInstall.OnNotesTab;
+        DockPanel.SetDock(installButton, Dock.Left); installButton.VerticalAlignment = VerticalAlignment.Center;
+        installProgress.Margin = new(16, 0, 0, 0); installProgress.VerticalAlignment = VerticalAlignment.Center;
+        installLine.Children.Add(installButton); installLine.Children.Add(installProgress);
         writeNotesRow = new StackPanel { Margin = new(0, 0, 0, 14), Children = { writeNotes, installLine, notesDestination } };
         writeNotes.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
         var writtenBy = new DockPanel { Margin = new(0, 0, 0, 10) };
@@ -163,7 +171,7 @@ internal sealed partial class MeetingsPanel
         page.ColumnDefinitions.Add(new ColumnDefinition());
         Grid.SetColumn(rightPane, 1);
         page.Children.Add(leftPane); page.Children.Add(rightPane);
-        notesTimer.Tick += (_, _) => { UpdateNotesProgress(); if (installCancellation is not null) UpdateInstall(); };
+        notesTimer.Tick += (_, _) => UpdateNotesProgress();
         settings.Saved += () => { if (selected is not null) UpdateNotes(); };
         return page;
     }
@@ -382,11 +390,10 @@ internal sealed partial class MeetingsPanel
     // The install action of the meeting notes model on the Notes tab, for the verification: the button is null while it is hidden, and
     // Progress the step and share next to it while it installs.
     internal (string? Button, string? Description, string? Progress, double Share) NotesInstallState =>
-        (Shown(writeNotesRow) && Shown(installOnNotes.Button) ? (string)installOnNotes.Button.Content : null, Shown(notesDestination) ? notesDestination.Text : null,
-         installOnNotes.Progress.Shown ? installOnNotes.Progress.Text : null, installOnNotes.Progress.Share);
-    // The install progress in the model's row under Models, for the verification: null while it is hidden. Failure is the text of its card.
-    internal (string? Progress, double Share, string? Failure) SettingsInstallState =>
-        (installInSettings.Progress.Shown ? installInSettings.Progress.Text : null, installInSettings.Progress.Share, modelsNotices.Notices.Find(NotesStatus.InstallFailedKey)?.Text);
+        (Shown(writeNotesRow) && Shown(notesInstall.OnNotesTab.Button) ? (string)notesInstall.OnNotesTab.Button.Content : null, Shown(notesDestination) ? notesDestination.Text : null,
+         notesInstall.OnNotesTab.Progress.Shown ? notesInstall.OnNotesTab.Progress.Text : null, notesInstall.OnNotesTab.Progress.Share);
+    // The install offered next to the Local model notes style, for the verification.
+    internal InstallOffer NotesChoiceInstall => notesInstall.NextToStyle;
     internal string NotesProgressText => notesProgress.Text;
     private static bool Shown(UIElement element) => element.Visibility == Visibility.Visible;
     private void ShowTab()
@@ -401,7 +408,7 @@ internal sealed partial class MeetingsPanel
     {
         if (selected is not { } document) return;
         var written = document.WrittenNotes;
-        ShowNotesText(written is not null ? MeetingHistory.WrittenNotesOnPage(written) : MeetingHistory.RuleNotesOnPage(document));
+        ShowNotesText(written is not null ? MeetingHistory.WithMissingAudio(document, MeetingHistory.WrittenNotesOnPage(written)) : MeetingHistory.RuleNotesOnPage(document));
         Show(writtenByRow, written is not null);
         notesWrittenBy.Text = written is null ? "" : $"Written by {written.Model} on {written.Written.ToLocalTime():d MMM yyyy, HH:mm}.";
         // Writing again is the less likely step once a model has written the notes.
@@ -419,9 +426,9 @@ internal sealed partial class MeetingsPanel
     {
         var written = document.WrittenNotes;
         var lastRun = notesRuns.GetValueOrDefault(document.Id);
-        var missingModel = settings.MeetingNotesStyle == MeetingNotesStyle.LocalModel && !MeetingNotesModel.IsInstalled(settings) && installCancellation is null;
+        var missingModel = settings.MeetingNotesStyle == MeetingNotesStyle.LocalModel && !MeetingNotesModel.IsInstalled(settings) && !notesInstall.Running();
         ListsOf(document).Notes.Sync(NotesStatus.Keys, document.Segments.Count == 0 && written is null ? []
-            : NotesStatus.For(written is not null, written is not null && !MeetingHistory.WrittenNotesMatchTranscript(document), lastRun, missingModel ? installFailure : null, openNotesSettings));
+            : NotesStatus.For(written is not null, written is not null && !MeetingHistory.WrittenNotesMatchTranscript(document), lastRun, missingModel ? notesInstall.Failure() : null, openNotesSettings));
     }
     // The button that has a model write the notes and where it sends them, or the install action while the local model is missing.
     private void UpdateWriteRow(MeetingDocument document)
@@ -433,13 +440,20 @@ internal sealed partial class MeetingsPanel
         notesDestination.Text = style == MeetingNotesStyle.Api
             ? $"Sends the title, languages, vocabulary and transcript text of this meeting, never audio, to {MeetingNotesWriter.Destination(settings)} when you press it; nothing is sent before."
             : !needsInstall ? "Runs on this PC with the meeting notes model; nothing leaves it."
-            : "Runs on this PC; nothing leaves it. The meeting notes model is not installed yet. " + InstallOffer;
-        Show(notesDestination, installCancellation is null || !needsInstall);
+            : "Runs on this PC; nothing leaves it. The meeting notes model is not installed yet. " + NotesInstallOffer;
+        Show(notesDestination, !notesInstall.Running() || !needsInstall);
         Show(writeNotesRow, style != MeetingNotesStyle.Extractive && document.Segments.Count > 0);
-        Show(writeNotes, !needsInstall); Show(installOnNotes.Button, needsInstall);
-        UpdateInstallRow(installOnNotes);
+        Show(writeNotes, !needsInstall); Show(notesInstall.OnNotesTab.Button, needsInstall);
         writeNotes.IsEnabled = notesCancellation is null && !IsRecording;
     }
+    // The install of the meeting notes model started or ended, or what is installed changed: the Notes tab and the notes style follow.
+    internal void FollowNotesInstall()
+    {
+        if (selected is not null) { UpdateWriteRow(selected); UpdateNotesStatus(selected); }
+        FollowChoice();
+    }
+    private void FollowChoice() =>
+        Show(notesModelMissing, notesStyles[MeetingNotesStyle.LocalModel].IsChecked == true && (!MeetingNotesModel.IsInstalled(settings) || notesInstall.Running()));
     // Each citation reads as its time and speaker and leads to the row on the Transcript tab.
     private void ShowNotesText(string notes)
     {
@@ -515,7 +529,7 @@ internal sealed partial class MeetingsPanel
         try { result = await MeetingNotesWriter.WriteAsync(copy, snapshot, cancellation.Token, CompleteNotes); }
         finally
         {
-            notesCancellation = null; notesMeeting = null; if (installCancellation is null) notesTimer.Stop();
+            notesCancellation = null; notesMeeting = null; notesTimer.Stop();
             // The refusals that waited for these notes no longer hold.
             historyNotices.Clear(NotesBeingWrittenKey); meetingNotices.Clear(NotesBeingWrittenKey);
         }

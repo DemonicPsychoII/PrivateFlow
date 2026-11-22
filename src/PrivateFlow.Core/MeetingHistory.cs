@@ -80,7 +80,11 @@ public static partial class MeetingHistory
     [GeneratedRegex(@"\[(?<title>[^\[\]\n]*?) · (?<time>\d{2}:\d{2}:\d{2}) · (?<speaker>[^\[\]\n·]*?) · (?<id>[0-9a-f]{32})\]", RegexOptions.CultureInvariant)]
     private static partial Regex CitationPattern();
     // The notes the meeting shows: those a model wrote for it, otherwise the extractive notes.
-    public static string Notes(MeetingDocument document) => document.WrittenNotes?.Text ?? MeetingArchive.Notes(document);
+    public static string Notes(MeetingDocument document) => document.WrittenNotes is { } written ? WithMissingAudio(document, written.Text) : MeetingArchive.Notes(document);
+    // Notes a model wrote before the final pass found audio missing do not name the gap; it stands before them on the page and in exports.
+    public static string WithMissingAudio(MeetingDocument document, string writtenNotes) =>
+        document.MissingAudioSeconds > 0 && !writtenNotes.Contains(MeetingArchive.DescribeMissingAudio(document), StringComparison.Ordinal)
+            ? MeetingArchive.DescribeMissingAudio(document) + "\n\n" + writtenNotes : writtenNotes;
     public const string StaleNotes = "The transcript changed after these notes were written, so they may cite rows that no longer say this.";
     // An exported file has no page around it to say that the transcript changed since a model wrote the notes.
     public static string ExportedNotes(MeetingDocument document) =>

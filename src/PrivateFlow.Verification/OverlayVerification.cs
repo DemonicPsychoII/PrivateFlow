@@ -7,8 +7,9 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Color = System.Windows.Media.Color;
 using ColorConverter = System.Windows.Media.ColorConverter;
+using PrivateFlow.Windows;
 
-namespace PrivateFlow.Windows;
+namespace PrivateFlow.Verification;
 
 // An explicit diagnostic mode: synthetic levels, a disposable focus fixture, no audio or input dispatch.
 internal static class OverlayVerification

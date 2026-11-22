@@ -13,7 +13,7 @@ static class DictationChecks
         Check(policy.CanInsert(session, SelectedTarget with { Control = 99 }, false, "hello"), "control identity changes within the selected window still paste");
         Check(policy.CanInsert(session, SelectedTarget with { AccessibleId = "new-field" }, false, "hello"), "browser accessibility identity changes within the selected window still paste");
         Check(!policy.CanInsert(session, SelectedTarget with { Process = 99 }, false, "hello"), "a reused window handle in another process cannot receive text");
-        Check(!policy.CanInsert(session, SelectedTarget with { Safe = false }, false, "hunter2"), "password field at paste time is refused");
+        Check(!policy.CanInsert(session, SelectedTarget with { Password = PasswordField.Yes }, false, "hunter2"), "password field at paste time is refused");
         Check(!policy.CanInsert(session, SelectedTarget, true, "hello"), "held modifiers prevent insertion");
         Check(!policy.CanInsert(session, SelectedTarget, false, "  "), "empty transcription cannot be inserted");
         Check(policy.CanInsert(session, SelectedTarget, false, "hello\nworld"), "multiline text is pasted, never typed as Enter");
@@ -28,18 +28,68 @@ static class DictationChecks
         Check(policy.IsCurrent(fresh), "old completion cannot stop the new session");
         policy.Complete(fresh);
         Check(!policy.IsCurrent(fresh), "completed session cannot insert twice");
-        session = policy.Begin(SelectedTarget with { Safe = false });
+        session = policy.Begin(SelectedTarget with { OwnWindow = true });
         Check(!policy.CanInsert(session, SelectedTarget, false, "secret"), "password field or Private Flow selected at start uses the clipboard fallback");
         session = policy.Begin(SelectedTarget with { Window = 0 });
         Check(!policy.CanInsert(session, SelectedTarget with { Window = 0 }, false, "hello"), "no foreground window uses the clipboard fallback");
+
+        // A field whose kind is unknown is never pasted into: at the start or at paste time.
+        session = policy.Begin(SelectedTarget with { Password = PasswordField.Unknown });
+        Check(!policy.CanInsert(session, SelectedTarget, false, "hello"), "a field that could not be checked at the start uses the clipboard fallback");
+        session = policy.Begin(SelectedTarget);
+        Check(!policy.CanInsert(session, SelectedTarget with { Password = PasswordField.Unknown }, false, "hello"), "a field that cannot be checked at paste time uses the clipboard fallback");
+        // UI Automation and the Win32 edit control: a password field by either blocks; otherwise one that says no decides; neither, unknown.
+        var no = PasswordField.No; var yes = PasswordField.Yes; var unknown = PasswordField.Unknown;
+        var table = new (PasswordField Automation, PasswordField Edit, PasswordField Expected)[]
+        {
+            (no, no, no), (no, yes, yes), (no, unknown, no), (yes, no, yes), (yes, yes, yes), (yes, unknown, yes), (unknown, no, no), (unknown, yes, yes), (unknown, unknown, unknown),
+        };
+        foreach (var (automation, edit, expected) in table)
+            Check(PasswordFields.Combine(automation, edit) == expected, $"UI Automation {automation} and the edit control {edit} make the field {expected}");
+        Check(PasswordFields.FromEditControl("Edit", 0x20, null) == yes && PasswordFields.FromEditControl("RICHEDIT50W", 0, '*') == yes && PasswordFields.FromEditControl("Edit", 0, 0) == no
+            && PasswordFields.FromEditControl("RichEditD2DPT", 0, 0) == no && PasswordFields.FromEditControl("WindowsForms10.EDIT.app.0.141b42a_r6_ad1", 0x20, 0) == yes
+            && PasswordFields.FromEditControl("Edit", 0, null) == unknown && PasswordFields.FromEditControl("Chrome_RenderWidgetHostHWND", 0x20, '*') == unknown
+            && PasswordFields.FromEditControl("ConsoleWindowClass", 0, 0) == unknown,
+            "an edit or rich edit control says by ES_PASSWORD or its password character; one that does not answer in time, and any other window class, cannot say");
+        Check(new FocusTarget(1, 2, 3, false, no).Safe && !new FocusTarget(1, 2, 3, false, unknown).Safe && !new FocusTarget(1, 2, 3, false, yes).Safe
+            && !new FocusTarget(1, 2, 3, true, no).Safe && !new FocusTarget(0, 2, 3, false, no).Safe, "only a known ordinary field of another app's window in front is safe");
+        // The reason the not-pasted notice gives.
+        Check(DictationPolicy.NotPastedReason(SelectedTarget with { Password = unknown }, SelectedTarget, false) == "could not check whether this is a password field"
+            && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget with { Password = unknown }, false) == "could not check whether this is a password field"
+            && DictationPolicy.NotPastedReason(SelectedTarget with { Password = yes }, SelectedTarget, false) == "password field or Private Flow itself"
+            && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget with { OwnWindow = true }, false) == "password field or Private Flow itself"
+            && DictationPolicy.NotPastedReason(SelectedTarget, OtherTarget with { Password = unknown }, false) == "the selected window is no longer in front"
+            && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget, false) == "Windows blocked the paste"
+            && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget, true) == "the clipboard could not be saved"
+            && DictationPolicy.NotPastedReason(SelectedTarget with { Window = 0, Password = unknown }, SelectedTarget, false) == "no window was in front at the start",
+            "the not-pasted notice names why: an unchecked field, a password field or Private Flow, another window in front, the clipboard, or Windows");
+        // The clipboard before a paste: an unreadable one is never replaced, by the paste or by the copy left when it fails.
+        Check(ClipboardSnapshot.Classify(true, []) == ClipboardCopy.Empty && ClipboardSnapshot.Classify(true, [true, true, true]) == ClipboardCopy.Complete
+            && ClipboardSnapshot.Classify(false, []) == ClipboardCopy.Incomplete && ClipboardSnapshot.Classify(true, [true, false, true]) == ClipboardCopy.Incomplete
+            && ClipboardSnapshot.AllowsPaste(ClipboardCopy.Empty) && ClipboardSnapshot.AllowsPaste(ClipboardCopy.Complete) && !ClipboardSnapshot.AllowsPaste(ClipboardCopy.Incomplete),
+            "a clipboard that stayed locked, or held a format that could not be read or read as no data, is not saved completely, so nothing replaces it; an empty or completely saved one may be");
+        // One observation: the field classified must still have the focus right before Ctrl+V, and a probe that timed out knows nothing.
+        var other = SelectedTarget with { Window = 77, Control = 78, Process = 79 };
+        Check(!DictationPolicy.SameFocus(SelectedTarget, other) && !DictationPolicy.SameFocus(SelectedTarget, SelectedTarget with { Control = 99 })
+            && DictationPolicy.SameFocus(SelectedTarget, SelectedTarget with { Password = unknown, AccessibleId = "x" }),
+            "classified A with the focus now on B, even another control of the same window, is not pasted; the same window, control and process are");
+        var element = SelectedTarget with { AccessibleId = "42.7" };
+        Check(DictationPolicy.SameElement(element, element with { AccessibleId = null }, "42.7") && !DictationPolicy.SameElement(element, element, "42.8")
+            && !DictationPolicy.SameElement(element, element, null) && !DictationPolicy.SameElement(element, other, "42.7") && DictationPolicy.SameElement(SelectedTarget with { AccessibleId = null }, SelectedTarget, null),
+            "right before Ctrl+V the accessibility element must be the one classified too: a move into the password field beside it in the same browser window is not pasted");
+        Check(PasswordFields.Settle(SelectedTarget, other).Password == unknown && !PasswordFields.Settle(SelectedTarget, other).Safe && PasswordFields.Settle(SelectedTarget, SelectedTarget) == SelectedTarget,
+            "a field whose focus moved while its password state was asked becomes unknown and is not safe; an unmoved one keeps its answer");
+        Check(PasswordFields.Combine(no, unknown, editControlTimedOut: true) == unknown && PasswordFields.Combine(no, no, editControlTimedOut: true) == unknown
+            && !new FocusTarget(1, 2, 3, false, PasswordFields.Combine(no, unknown, editControlTimedOut: true)).Safe,
+            "an edit control that does not answer in time leaves the field unknown, which is not pasted into, whatever UI Automation said");
     }
 
     public static void VerifyPreparedDictation()
     {
         var aliases = new[] { new PhraseRule { Original = "code x", Replacement = "Codex" } };
-        var snippets = new[] { new PhraseRule { Original = "my signature", Replacement = "Alex\nCreative Engineer" }, new PhraseRule { Original = "signature", Replacement = "short" } };
+        var snippets = new[] { new PhraseRule { Original = "my signature", Replacement = "Alex\nTest Engineer" }, new PhraseRule { Original = "signature", Replacement = "short" } };
         var prepared = new PreparedDictation("Use code x. my signature", aliases, snippets, "en", false, false);
-        Same(prepared.Restore(prepared.Text), "Use Codex. Alex\nCreative Engineer", "aliases apply with longest nonrecursive snippet expansion");
+        Same(prepared.Restore(prepared.Text), "Use Codex. Alex\nTest Engineer", "aliases apply with longest nonrecursive snippet expansion");
         Check(!prepared.PreservesSnippets("changed text"), "missing snippet token is rejected");
         Reject(() => prepared.Restore(prepared.Text + prepared.Text), "duplicated snippet tokens are rejected");
         prepared = new PreparedDictation("quote code x end quote and code x", aliases, [], "en", false, false);
@@ -91,6 +141,11 @@ static class DictationChecks
         Check(PrivateFlow.Windows.DictationPipeline.PolishNotSetUp(notInstalled.Notice) && !PrivateFlow.Windows.DictationPipeline.PolishNotSetUp(noKey.Notice)
             && !PrivateFlow.Windows.DictationPipeline.PolishNotSetUp("Used Clean: rewriting unavailable.") && !PrivateFlow.Windows.DictationPipeline.PolishNotSetUp(null),
             "the Used Clean card offers the Local polish setup only when its model is missing");
+        var literalClean = await PrivateFlow.Windows.DictationPipeline.ProcessAsync(corrected, Styled(OutputStyle.Clean, styled => styled.LiteralMode = true), CancellationToken.None);
+        var literalConcise = await PrivateFlow.Windows.DictationPipeline.ProcessAsync(corrected, Styled(OutputStyle.Concise, styled => styled.LiteralMode = true), CancellationToken.None);
+        var literalPolish = await PrivateFlow.Windows.DictationPipeline.ProcessAsync(corrected, Styled(OutputStyle.LocalPolish, styled => styled.LiteralMode = true), CancellationToken.None);
+        Check(literalClean.Final.Contains("no wait") && literalConcise.Final == literalClean.Final && literalConcise.Notice is null
+            && literalPolish.Final == literalClean.Final && literalPolish.Notice is null, "Literal mode keeps the spoken correction and skips the Concise and Local polish rewrite");
         var longText = string.Concat(Enumerable.Repeat("We ship on Friday. ", 700));
         Environment.SetEnvironmentVariable(pipelineVariable, "synthetic-key");
         try
@@ -99,9 +154,9 @@ static class DictationChecks
             Check(tooLong.Notice == "Used Clean: Long transcript uses Clean; select smaller sections for rewriting." && tooLong.Final == longText.Trim(), "a transcript over 12,000 characters is never sent for rewriting");
         }
         finally { Environment.SetEnvironmentVariable(pipelineVariable, null); }
-        var signature = new[] { new PhraseRule { Original = "my signature", Replacement = "Alex\nCreative Engineer" } };
+        var signature = new[] { new PhraseRule { Original = "my signature", Replacement = "Alex\nTest Engineer" } };
         var expanded = await PrivateFlow.Windows.DictationPipeline.ProcessAsync("Please add my signature.", Styled(OutputStyle.Clean, styled => styled.Snippets = [.. signature]), CancellationToken.None);
-        Same(expanded.Final, "Please add Alex\nCreative Engineer.", "Clean expands a snippet with its stored line breaks");
+        Same(expanded.Final, "Please add Alex\nTest Engineer.", "Clean expands a snippet with its stored line breaks");
         var exactSnippet = await PrivateFlow.Windows.DictationPipeline.ProcessAsync("Please add my signature.", Styled(OutputStyle.Exact, styled => styled.Snippets = [.. signature]), CancellationToken.None);
         Same(exactSnippet.Final, "Please add my signature.", "Exact leaves snippet phrases as spoken");
         var mail = await PrivateFlow.Windows.DictationPipeline.ProcessAsync("Hi Anna, uh, thanks for the update. Best regards, Alex.", Styled(OutputStyle.Clean, styled => styled.SpokenFormatting = true), CancellationToken.None);

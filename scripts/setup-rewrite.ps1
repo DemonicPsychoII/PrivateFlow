@@ -48,7 +48,7 @@ function Get-VerifiedDownload([string]$Url,[string]$File,[string]$Hash,[long]$Si
     Move-Item -LiteralPath "$File.partial" -Destination $File -Force
 }
 if ($Part -eq 'notes') {
-    # Meeting notes need the GPU: Qwen3.5-4B wrote notes for a 30-minute meeting in 20 to 33 s with the CUDA build on an RTX 4060 Laptop
+    # Meeting notes need the GPU: Qwen3.5-4B wrote notes for a 30-minute meeting in 20 to 33 s with the CUDA build on an 8 GB NVIDIA GPU
     # and in 4 to 5 minutes on the processor (docs/VALIDATION.md). Without an NVIDIA GPU the processor build is installed instead.
     $taskArchives = if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) { @((Get-Pinned 'llama-cuda12'), (Get-Pinned 'llama-cudart12')) } else { @(Get-Pinned 'llama-cpu') }
     $taskPinned = Get-Pinned 'qwen3.5-4b'
@@ -65,6 +65,8 @@ foreach ($taskEntry in $taskArchives) {
     Get-VerifiedDownload $taskEntry.Url $taskArchive $taskEntry.Sha256
     Expand-Archive -LiteralPath $taskArchive -DestinationPath $taskRuntime -Force
 }
+# The app waits for this line before it lets a local model run again; the model download that follows does not touch the runtime.
+Write-Host 'Local model runtime is in place.'
 $taskExe = Get-ChildItem -LiteralPath $taskRuntime -Filter llama-server.exe -Recurse | Select-Object -First 1
 if (-not $taskExe) { throw 'Verified runtime did not contain llama-server.exe.' }
 $taskModel = Join-Path $taskModels $taskPinned.File

@@ -16,18 +16,21 @@ internal sealed partial class WorkspacePages
     private readonly Action<string> openSettings;
     public WorkspacePage Models { get; }
     // A model list row's parts that follow the settings and the running operations.
-    private sealed record ModelRow(ListedModel Model, TextBlock Sizes, TextBlock State, TextBlock RunsOn, Button Install, Button Remove, string InstallLabel);
+    private sealed record ModelRow(ListedModel Model, TextBlock Sizes, TextBlock State, TextBlock RunsOn, Button Install, Button Remove, SetupProgressView Progress);
     private readonly List<ModelRow> modelRows = [];
-    // The model whose setup runs now, and every bar and button that shows it.
+    // The model whose setup runs now, and every bar and button that shows it, wherever it is offered.
     private string? installingKey;
     private readonly Dictionary<string, List<SetupProgressView>> progressViews = ModelList.All.ToDictionary(model => model.Key, _ => new List<SetupProgressView>());
-    private readonly List<(string Key, Button Button, string Label)> installButtons = [];
+    private readonly List<(string Key, Button Button, string Label, bool NamedByModel)> installButtons = [];
+    // Why the last install of the meeting notes model ended without it: a card here and on the Notes tab until it is installed.
+    private string? notesInstallFailure;
     private Action refreshUsedFor = () => { };
     // The local choice rows, which stand in the local processing card and follow whether preferences can change.
     private readonly List<UIElement> choiceRowsInCard = [];
     // An install or a removal ended, so what is installed may have changed.
     public event Action? ModelsChanged;
-    private const string ModelInstallFailedKey = "model-install-failed", ModelRemoveRefusedKey = "model-remove-refused", ModelRemoveFailedKey = "model-remove-failed";
+    private const string ModelInstallFailedKey = "model-install-failed", ModelRemoveRefusedKey = "model-remove-refused", ModelRemoveFailedKey = "model-remove-failed",
+        NotesInstallRefusedKey = "notes-install-refused", NotesInstallTitle = "Installing the meeting notes model";
 
     private WorkspacePage BuildModels()
     {
@@ -36,20 +39,15 @@ internal sealed partial class WorkspacePages
         {
             var sizes = Description(""); var state = Description(""); var runsOn = Description("");
             foreach (var line in new[] { sizes, state, runsOn }) line.Margin = new(0, 2, 0, 0);
-            var notes = model.Use == ModelUse.Notes;
-            var progress = notes ? meetings.ModelsListInstall.Progress : NewProgress(model.Key);
+            var (install, progress) = Offer(model, $"Install ({ModelList.Size(ModelList.DownloadBytes(model, SpeechSetup.HasNvidiaGpu))})");
             progress.Margin = new(0, 6, 0, 0);
-            var label = $"Install ({ModelList.Size(ModelList.DownloadBytes(model, SpeechSetup.HasNvidiaGpu))})";
-            var install = notes ? meetings.ModelsListInstall.Button : InstallButton(model, label);
             var remove = Button("Remove", () => _ = RemoveAsync(model), "Danger");
             AutomationProperties.SetName(remove, "Remove " + model.Pinned.Name);
-            modelRows.Add(new(model, sizes, state, runsOn, install, remove, label));
+            modelRows.Add(new(model, sizes, state, runsOn, install, remove, progress));
             var row = Row(Stack(new TextBlock { Text = model.Pinned.Name, Style = Theme("RowTitle") }, Description(model.Purpose), sizes, state, runsOn, progress), Actions(install, remove));
             (model.Use is ModelUse.Polish or ModelUse.Notes ? localRows : transcriptionRows).Add(row);
             modelCards.Add((model.Use is ModelUse.Polish or ModelUse.Notes ? LocalCardTitle : TranscriptionCardTitle, model.Key));
         }
-        meetings.InstallChanged += () => { RefreshModels(); ModelsChanged?.Invoke(); };
-        meetings.OtherOperation = () => OperationRunning(notesInstall: false);
         settings.Saved += RefreshModels;
         var (speechRow, choiceRows) = BuildUsedFor();
         // The choice rows were built in one panel; in the card they stand as its rows.
@@ -81,21 +79,32 @@ internal sealed partial class WorkspacePages
         progressViews[key].Add(view);
         return view;
     }
-    // Pressed while its model installs, the button cancels the install.
-    private Button InstallButton(ListedModel model, string label)
+    // An Install button with its bar, wherever a model is offered: a row of the list, next to a choice, on the Notes tab. Pressed while its
+    // model installs, the button cancels the install. A screen reader hears the model's name unless the label already says which it is.
+    private Button InstallButton(ListedModel model, string label, bool namedByModel = true)
     {
         var button = Button(label, () => PressInstall(model), "Primary");
-        installButtons.Add((model.Key, button, label));
+        installButtons.Add((model.Key, button, label, namedByModel));
         return button;
     }
+    private InstallOffer Offer(ListedModel model, string label, bool namedByModel = true) => new(InstallButton(model, label, namedByModel), NewProgress(model.Key));
+    // Every Install of a model lands here, also Try again and the Local polish cards.
     private void PressInstall(ListedModel model)
     {
-        if (installingKey == model.Key && recommendedRun is null) { busyCancellation?.Cancel(); return; }
-        if (model.Use != ModelUse.Notes && OperationRunning() is not null) return;
+        if (installingKey == model.Key) { busyCancellation?.Cancel(); return; }
+        var notes = model.Use == ModelUse.Notes;
+        // The notes model is also offered on the Notes tab, away from what keeps it waiting, so a press that cannot start says why.
+        if (OperationRunning() is { } other)
+        {
+            if (notes) modelsNotices.Report(new(NotesInstallRefusedKey, NoticeKind.Warning, "Not installed while another setup runs", $"{other} runs first; install the meeting notes model once it has finished."));
+            return;
+        }
+        if (notes && meetings.IsRecording)
+        { modelsNotices.Report(new(NotesInstallRefusedKey, NoticeKind.Warning, "Not installed while a meeting runs", "Finish the meeting before installing the meeting notes model.")); return; }
         var failedTitle = $"{model.Pinned.Name} was not installed";
         switch (model.Use)
         {
-            case ModelUse.Notes: meetings.PressInstall(); break;
+            case ModelUse.Notes: _ = InstallNotesModelAsync(); break;
             case ModelUse.Polish: InstallPolish(modelsNotices, ModelInstallFailedKey, failedTitle); break;
             default: _ = SetupAsync("setup-engine.ps1", "Installing " + model.Pinned.Name, model.Key, (modelsNotices, ModelInstallFailedKey, failedTitle), progressViews[model.Key], null, false, "-Download", model.Key); break;
         }
@@ -103,20 +112,23 @@ internal sealed partial class WorkspacePages
     // The model chosen for Local polish, installed unless it is there or installing; "Set up Local polish" on its cards lands here.
     public void InstallForLocalPolish(ListedModel model)
     {
-        if (ModelList.IsInstalled(settings, model) || installingKey == model.Key || model.Use == ModelUse.Notes && meetings.IsInstallingNotesModel) return;
+        if (ModelList.IsInstalled(settings, model) || installingKey == model.Key) return;
         PressInstall(model);
     }
     // Set up Local polish under Speech recognition and Install under Models run this one setup; the failure card stands where it was pressed.
     private void InstallPolish(NoticeStack notices, string failedKey, string failedTitle) =>
         _ = SetupAsync("setup-rewrite.ps1", "Setting up Local polish", ModelCatalogue.PolishModel, (notices, failedKey, failedTitle), progressViews[ModelCatalogue.PolishModel], null, false);
+    // The meeting notes model from any of its offers, and as the local processing step of Install recommended.
+    private Task<string?> InstallNotesModelAsync(Action<string, double>? step = null, bool partOfRun = false) =>
+        SetupAsync("setup-rewrite.ps1", NotesInstallTitle, ModelCatalogue.NotesModel, (modelsNotices, NotesStatus.InstallFailedKey, "The meeting notes model was not installed"),
+            progressViews[ModelCatalogue.NotesModel], step, partOfRun, "-Part", "notes");
 
     // What runs now and keeps a model from being removed, or null.
-    // The one gate of the page: an install, a removal, Apply or a check runs, and every other one waits until it has finished. The notes
-    // install asks it too, without itself.
+    // The one gate of the page: an install, a removal, Apply or a check runs, and every other one waits until it has finished.
     private bool removing;
-    private string? OperationRunning(bool notesInstall = true) =>
+    private string? OperationRunning() =>
         recommendedRun is not null ? "Installing the recommended models" : busy ? "A setup or a check" : removing ? "Removing a model"
-        : notesInstall && meetings.IsInstallingNotesModel ? "Installing the meeting notes model" : null;
+        : installingKey == ModelCatalogue.NotesModel ? NotesInstallTitle : null;
     private string? RunningOperation() =>
         !enabled ? "A dictation or a file transcription" : meetings.IsRecording ? "A meeting" : OperationRunning()
         ?? (LocalRewriter.Running is { } task ? (task == LocalRewriter.NotesTask ? "Writing meeting notes" : "Local polish") : null);
@@ -147,24 +159,22 @@ internal sealed partial class WorkspacePages
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { modelsNotices.Report(new(ModelRemoveFailedKey, NoticeKind.Error, $"{name} was not removed", NoticeText.Short(ex.Message), NoticeText.Detail(ex.Message))); }
-        finally { removing = false; }
-        meetings.RefreshInstall(); RefreshModels(); ModelsChanged?.Invoke();
+        finally { removing = false; OperationEnded?.Invoke(); }
+        RefreshModels(); ModelsChanged?.Invoke();
     }
 
     private void RefreshModels()
     {
         if (modelRows.Count == 0) return;
         var nvidia = SpeechSetup.HasNvidiaGpu;
-        var notesInstalling = meetings.IsInstallingNotesModel;
         var free = enabled && !meetings.IsRecording && OperationRunning() is null;
-        meetings.FollowOtherOperations();
         // Apply, Set up Local polish and the check under Speech recognition wait too.
         SpeechEngine.Content.IsEnabled = enabled && OperationRunning() is null;
         foreach (var row in modelRows)
         {
             var model = row.Model;
             var installed = ModelList.IsInstalled(settings, model);
-            var installing = installingKey == model.Key || model.Use == ModelUse.Notes && notesInstalling;
+            var installing = installingKey == model.Key;
             var onDisk = installed && File.Exists(ModelList.ModelPath(settings, model)) ? new FileInfo(ModelList.ModelPath(settings, model)).Length : model.Pinned.Bytes;
             row.Sizes.Text = $"Download {ModelList.Size(ModelList.DownloadBytes(model, nvidia))} · {ModelList.Size(onDisk)} on disk for the model file";
             row.State.Text = installing ? "Installing" : !installed ? "Not installed"
@@ -172,18 +182,22 @@ internal sealed partial class WorkspacePages
             row.RunsOn.Text = ModelList.RunsOn(settings, model, nvidia);
             Show(row.Remove, installed && !installing);
             row.Remove.IsEnabled = free;
-            if (model.Use == ModelUse.Notes) continue;
             Show(row.Install, !installed || installing);
         }
-        foreach (var (key, button, label) in installButtons)
+        foreach (var (key, button, label, namedByModel) in installButtons)
         {
             var installing = installingKey == key;
             button.Content = installing ? "Cancel installing" : label;
-            AutomationProperties.SetName(button, installing ? "Cancel installing " + ModelCatalogue.Model(key).Name : $"Install {ModelCatalogue.Model(key).Name}");
+            AutomationProperties.SetName(button, !namedByModel ? (string)button.Content : (installing ? "Cancel installing " : "Install ") + ModelCatalogue.Model(key).Name);
             if (installing) button.ClearValue(FrameworkElement.StyleProperty); else button.Style = Theme("Primary");
             button.IsEnabled = installing || free;
         }
         foreach (var row in choiceRowsInCard) row.IsEnabled = enabled;
+        if (notesInstallFailure is null || installingKey == ModelCatalogue.NotesModel || MeetingNotesModel.IsInstalled(settings)) modelsNotices.Clear(NotesStatus.InstallFailedKey);
+        else modelsNotices.Raise(new(NotesStatus.InstallFailedKey, NoticeKind.Error, "The meeting notes model was not installed", NoticeText.Short(notesInstallFailure), NoticeText.Detail(notesInstallFailure),
+            new("Try again", () => PressInstall(ModelList.Find(ModelCatalogue.NotesModel)))));
+        if (!meetings.IsRecording) modelsNotices.Clear(NotesInstallRefusedKey);
+        meetings.FollowNotesInstall();
         UpdateRecommended();
         refreshUsedFor();
     }
@@ -191,7 +205,11 @@ internal sealed partial class WorkspacePages
     // The rows as shown, for the verification.
     internal IReadOnlyList<(string Key, string State, string RunsOn, bool InstallShown, bool RemoveShown)> ModelRowsShown =>
         modelRows.Select(row => (row.Model.Key, row.State.Text, row.RunsOn.Text, row.Install.Visibility == Visibility.Visible, row.Remove.Visibility == Visibility.Visible)).ToList();
-    internal SetupProgressView ModelProgress(string key) => progressViews[key][0];
+    internal SetupProgressView ModelProgress(string key) => modelRows.Single(row => row.Model.Key == key).Progress;
+    internal Button ModelInstall(string key) => modelRows.Single(row => row.Model.Key == key).Install;
+    // The install of the meeting notes model in its row, for the verification: the step while it runs, and the text of its card.
+    internal (string? Progress, double Share, string? Failure) NotesInstallInModels =>
+        (ModelProgress(ModelCatalogue.NotesModel) is { Shown: true } shown ? shown.Text : null, ModelProgress(ModelCatalogue.NotesModel).Share, modelsNotices.Notices.Find(NotesStatus.InstallFailedKey)?.Text);
 
     // Which model each feature uses. Speech is chosen with Apply under Speech recognition and only shown here; Local polish, where the meeting
     // notes model runs and how meeting notes are written are preferences.
@@ -216,11 +234,11 @@ internal sealed partial class WorkspacePages
         var polishMissingText = Description("");
         var polishProgress = NewProgress(ModelCatalogue.PolishModel); polishProgress.Margin = new(0, 6, 0, 0);
         var polishInstall = InstallButton(ModelList.Find(ModelCatalogue.PolishModel), $"Install ({ModelList.Size(ModelList.DownloadBytes(ModelList.Find(ModelCatalogue.PolishModel), SpeechSetup.HasNvidiaGpu))})");
-        var notesForPolish = meetings.AddInstallRow($"Install ({ModelList.Size(MeetingNotesModel.DownloadBytes)})");
+        var notesForPolish = Offer(ModelList.Find(ModelCatalogue.NotesModel), $"Install ({ModelList.Size(MeetingNotesModel.DownloadBytes)})", false);
         notesForPolish.Progress.Margin = new(0, 6, 0, 0);
         var polishMissing = Row(Stack(polishMissingText, polishProgress, notesForPolish.Progress), Actions(polishInstall, notesForPolish.Button));
         var notesRunsOnRow = Row(Stack(new TextBlock { Text = "Meeting notes model runs on", Style = Theme("RowTitle") },
-            Description("Measured with a synthetic 50-minute meeting of 106 rows on an RTX 4060 Laptop: notes in 28 s on the GPU, 166 s on the processor only, within the time limit of about 18 minutes. " +
+            Description("Measured with a synthetic 50-minute meeting of 106 rows on an 8 GB NVIDIA GPU: notes in 28 s on the GPU, 166 s on the processor only, within the time limit of about 18 minutes. " +
                 "Local polish with this model: 0.4 s typical on the GPU, 2.5 s on the processor.")), notesRunsOn);
         refreshUsedFor = () =>
         {
@@ -231,7 +249,7 @@ internal sealed partial class WorkspacePages
                   $"Runs on: {(settings.SpeechBackend == "auto" ? "Automatic" : gpu ? "GPU" : "processor")}. These are chosen under Speech recognition and set up with Apply.";
             var shownPolish = ModelList.Find(ShownPolishModel() == LocalPolishModel.MeetingNotesModel ? ModelCatalogue.NotesModel : ModelCatalogue.PolishModel);
             var polishInstalled = ModelList.IsInstalled(settings, shownPolish);
-            var polishInstalling = installingKey == shownPolish.Key || shownPolish.Use == ModelUse.Notes && meetings.IsInstallingNotesModel;
+            var polishInstalling = installingKey == shownPolish.Key;
             Show(polishMissing, !polishInstalled || polishInstalling);
             polishMissingText.Text = $"The {(shownPolish.Use == ModelUse.Notes ? "meeting notes model" : "Local polish model")} is not installed, so Local polish uses Clean until it is.";
             Show(polishInstall, shownPolish.Use == ModelUse.Polish);
@@ -263,3 +281,9 @@ internal sealed partial class WorkspacePages
     }
     private static string NotesLayersTag(int layers) => Math.Max(-1, layers).ToString();
 }
+
+// An Install button with its bar, placed wherever a model is offered; WorkspacePages labels, enables and fills them while its setup runs.
+internal sealed record InstallOffer(Button Button, SetupProgressView Progress);
+// The install of the meeting notes model as the History page and the notes style choice show it: its offers there, whether it runs and
+// why the last one ended without the model. Settings → Models runs it with every other setup.
+internal sealed record NotesModelInstall(InstallOffer OnNotesTab, InstallOffer NextToStyle, Func<bool> Running, Func<string?> Failure);

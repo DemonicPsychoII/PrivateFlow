@@ -6,30 +6,23 @@ namespace PrivateFlow.Windows;
 public partial class App : System.Windows.Application
 {
     private Mutex? instance;
-    internal static bool DiagnosticMode { get; private set; }
+    // The diagnostic instance of the verification host (src/PrivateFlow.Verification): capture, shortcuts and insertion stay off. The app
+    // itself never sets it.
+    internal static bool DiagnosticMode { get; set; }
+    // The test build's audio library in place of the microphone; null in normal use.
+    internal static LibraryAudio? LibraryAudio { get; private set; }
+    // The verification and evaluation modes are in PrivateFlow.Verification.exe, which is built beside the package and not part of it.
+    private static readonly string[] VerificationSwitches = ["--verify-workspace", "--diagnostic-ui", "--verify-overlay", "--verify-insert", "--insert-fixture",
+        "--evaluate-meeting", "--evaluate-dictation", "--evaluate-recordings", "--write-notes", "--build-audio-library", "--verify-imports", "--verify-worker-faults"];
     protected override void OnStartup(StartupEventArgs e)
     {
         // The interface is English, so its numbers and dates do not follow the region format of Windows: "3.4 GB" and "42%", not
         // "3,4 GB" and "42 %". English rather than the invariant culture, which also writes "42 %".
         System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
         base.OnStartup(e);
-        if (e.Args is ["--verify-workspace", var report] && Settings.IsolatedRoot)
-        { DiagnosticMode = true; _ = WorkspaceVerification.RunAsync(report); return; }
-        if (e.Args is ["--diagnostic-ui"] && Settings.IsolatedRoot)
-        {
-            DiagnosticMode = true;
-            try { var diagnostic = new MainWindow(); MainWindow = diagnostic; diagnostic.Show(); }
-            catch (SettingsUnavailableException ex) { Console.Error.WriteLine($"Private Flow cannot read its settings: {ex.Message}"); Shutdown(3); }
-            return;
-        }
         if (e.Args is ["--speech-worker", var pipe, var engine, var model, var memory])
         {
             _ = SpeechWorker.RunChildAsync(pipe, engine, model, memory);
-            return;
-        }
-        if (e.Args.Length == 2 && e.Args[0] == "--verify-overlay" && Settings.IsolatedRoot)
-        {
-            _ = OverlayVerification.RunAsync(e.Args[1]);
             return;
         }
         if (e.Args.Length == 2 && e.Args[0] == "--export-icon")
@@ -39,30 +32,36 @@ public partial class App : System.Windows.Application
             Shutdown(0);
             return;
         }
-        if (e.Args.Length == 2 && e.Args[0] == "--verify-insert" && Settings.IsolatedRoot) { _ = InsertionVerification.RunAsync(e.Args[1]); return; }
-        if (e.Args.Length == 2 && e.Args[0] == "--insert-fixture" && Settings.IsolatedRoot) { InsertionVerification.ShowFixture(e.Args[1]); return; }
-        if (e.Args is ["--transcribe-file", var input, var output] && Settings.IsolatedRoot)
-        { _ = TranscribeFileAsync(input, output); return; }
-        if (e.Args is ["--evaluate-meeting", var scenarios, var evaluationReport, ..] && e.Args.Length <= 4 && Settings.IsolatedRoot)
-        { DiagnosticMode = true; _ = MeetingEvaluation.RunAsync(scenarios, evaluationReport, e.Args.Length == 4 ? e.Args[3] : null); return; }
-        if (e.Args is ["--evaluate-dictation", var suite, var dictationReport] && Settings.IsolatedRoot)
-        { DiagnosticMode = true; _ = DictationEvaluation.RunAsync(suite, dictationReport); return; }
-        if (e.Args is ["--evaluate-recordings", var recordings, var recordingsReport] && Settings.IsolatedRoot)
-        { DiagnosticMode = true; _ = MeetingEvaluation.RecordingsAsync(recordings, recordingsReport); return; }
-        // The API style sends the meeting's transcript text, so it runs only when asked for by name.
-        if (e.Args is ["--write-notes", var meeting, var notesOutput, .. var notesOptions] && notesOptions is [] or ["--api"] && Settings.IsolatedRoot)
-        { DiagnosticMode = true; _ = WriteNotesAsync(meeting, notesOutput, notesOptions.Length == 1); return; }
-        // A diagnostic or evaluation mode without an isolated data folder ends here instead of opening the app with the owner's settings.
-        if (e.Args is ["--verify-workspace" or "--diagnostic-ui" or "--evaluate-meeting" or "--evaluate-dictation" or "--evaluate-recordings" or "--write-notes", ..] && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PRIVATE_FLOW_DATA_DIR"))
-            || e.Args is ["--verify-overlay" or "--verify-insert" or "--insert-fixture", _])
-        { Shutdown(2); return; }
-        instance = new Mutex(true, "Local\\PrivateFlow-" + Environment.UserName, out var first);
-        if (!first) { System.Windows.MessageBox.Show("Private Flow is already running. Open it from the system tray."); Shutdown(); return; }
-        if (e.Args.Length == 3 && e.Args[0] == "--transcribe-file")
+        // Transcribes one file into a text file, only with an isolated data folder and without taking the instance lock.
+        if (e.Args is ["--transcribe-file", ..])
         {
-            _ = TranscribeFileAsync(e.Args[1], e.Args[2]);
+            if (e.Args is [_, var input, var output] && Settings.IsolatedRoot) _ = TranscribeFileAsync(input, output); else Shutdown(2);
             return;
         }
+        // A verification or evaluation switch ends here instead of opening the app.
+        if (e.Args is [var mode, ..] && VerificationSwitches.Contains(mode)) { Shutdown(2); return; }
+        // The test build: the whole app, with an audio library in place of the microphone. Without an isolated data folder it does
+        // not start at all, so it never runs with the owner's settings or microphone.
+        var startArguments = e.Args;
+        if (e.Args is ["--library-audio", ..])
+        {
+            if (e.Args is not [_, var library, "--seed", var seedText, .. var rest] || rest is not ([] or ["--show"]) || !int.TryParse(seedText, out var seed) || seed < 0 || !Settings.IsolatedRoot)
+            { Shutdown(2); return; }
+            try { LibraryAudio = LibraryAudio.Load(library, seed); }
+            catch (System.IO.InvalidDataException) { Shutdown(3); return; }
+            startArguments = rest;
+        }
+        // A copy started while the installer runs would be stopped by it without saving, also in the middle of a meeting. Only the
+        // installation of the user's own data folder holds the mutex, so isolated test copies never wait for each other.
+        if (!Settings.IsolatedRoot && Mutex.TryOpenExisting(PrivateFlow.Core.UpdateGate.InstallerMutexPrefix + Environment.UserName, out var installer))
+        {
+            installer.Dispose();
+            System.Windows.MessageBox.Show(PrivateFlow.Core.UpdateGate.Installing);
+            Shutdown();
+            return;
+        }
+        instance = new Mutex(true, "Local\\PrivateFlow-" + Environment.UserName, out var first);
+        if (!first) { System.Windows.MessageBox.Show("Private Flow is already running. Open it from the system tray."); Shutdown(); return; }
         MainWindow window;
         while (true)
         {
@@ -77,7 +76,7 @@ public partial class App : System.Windows.Application
         MainWindow = window;
         // Start in the tray. The handle is still created so the shortcut registers and works
         // while hidden. --show opens the window for the UI smoke test, which needs it on screen.
-        if (e.Args is ["--show"]) window.Show();
+        if (startArguments is ["--show"]) window.Show();
         else new System.Windows.Interop.WindowInteropHelper(window).EnsureHandle();
         window.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, WarmUpPress);
     }
@@ -98,29 +97,6 @@ public partial class App : System.Windows.Application
             Shutdown(0);
         }
         catch (Exception ex) { System.IO.File.WriteAllText(output, "ERROR: " + ex.Message); Shutdown(1); }
-    }
-    // Evaluation mode: the notes of one meeting file in every style, one after the other for comparison. A style that cannot run here
-    // shows its fallback reason.
-    private async Task WriteNotesAsync(string meetingFile, string outputFile, bool withApi)
-    {
-        try
-        {
-            var document = System.Text.Json.JsonSerializer.Deserialize<PrivateFlow.Core.MeetingDocument>(await System.IO.File.ReadAllTextAsync(meetingFile))
-                ?? throw new System.IO.InvalidDataException(meetingFile);
-            var report = new System.Text.StringBuilder();
-            foreach (var style in Enum.GetValues<PrivateFlow.Core.MeetingNotesStyle>().Where(style => withApi || style != PrivateFlow.Core.MeetingNotesStyle.Api))
-            {
-                var settings = Settings.Load(); settings.MeetingNotesStyle = style;
-                var timer = System.Diagnostics.Stopwatch.StartNew();
-                var notes = await MeetingNotesWriter.WriteAsync(document, settings, CancellationToken.None);
-                var outcome = $"{timer.Elapsed.TotalSeconds:0.0} s, " + (notes.Written ? $"{notes.Dropped} dropped" : notes.Run is { Outcome: PrivateFlow.Core.NotesRunOutcome.NothingFound } ? "the model found nothing to note"
-                    : notes.FallbackReason is { } reason ? "fell back: " + reason : "no model");
-                report.Append($"=== {style} notes ({outcome}) ===\n").Append(notes.Notice is { } notice ? $"[Notice] {notice}\n" : "").Append(notes.Text).Append("\n\n");
-            }
-            await System.IO.File.WriteAllTextAsync(outputFile, report.ToString());
-            Shutdown(0);
-        }
-        catch (Exception ex) { await System.IO.File.WriteAllTextAsync(outputFile, "ERROR: " + ex.Message); Shutdown(1); }
     }
     protected override void OnExit(ExitEventArgs e) { WhisperEngine.Shutdown(); LocalRewriter.Shutdown(); instance?.Dispose(); base.OnExit(e); }
 }

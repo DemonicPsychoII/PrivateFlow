@@ -1,8 +1,10 @@
-[CmdletBinding()]
-param([string]$App = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts\app\PrivateFlow.exe'))
+﻿[CmdletBinding()]
+param([string]$App = '')
 $ErrorActionPreference = 'Stop'
+# Resolved here: Windows PowerShell 5.1 leaves $PSScriptRoot empty in the defaults of a [CmdletBinding()] script's parameters.
+if (-not $App) { $App = Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts\app\PrivateFlow.exe' }
 if ($env:PRIVATE_FLOW_DATA_DIR -and $env:PRIVATE_FLOW_DATA_DIR -notmatch '^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)') { throw 'PRIVATE_FLOW_DATA_DIR must be an absolute path.' }
-$taskRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts\smoke'
+$taskRoot = Join-Path $(if ($env:PRIVATE_FLOW_EVAL_OUTPUT) { $env:PRIVATE_FLOW_EVAL_OUTPUT } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts' }) 'smoke'
 New-Item -ItemType Directory -Force -Path $taskRoot | Out-Null
 $taskData = Join-Path $taskRoot 'data'
 New-Item -ItemType Directory -Force -Path $taskData | Out-Null

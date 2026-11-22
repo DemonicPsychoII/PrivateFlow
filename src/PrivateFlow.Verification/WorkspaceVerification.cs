@@ -6,8 +6,9 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using NAudio.Wave;
 using PrivateFlow.Core;
+using PrivateFlow.Windows;
 
-namespace PrivateFlow.Windows;
+namespace PrivateFlow.Verification;
 
 internal static class WorkspaceVerification
 {
@@ -73,6 +74,16 @@ internal static class WorkspaceVerification
                     && finalized.Status == "Complete" && finalized.Segments.Count > 1 && archive.AudioBytes(finalized.Id) == 0,
                     $"Stop finalizes: named steps from stopping to saving ({string.Join(", ", steps)}), progress never falls and ends at 100 %, then Complete with the final transcript and no audio left");
                 archive.Delete(finalized.Id);
+                // The same Stop with Retain processed audio on: the final transcript is written and the audio stays with the meeting.
+                var retainedSettings = settings.Snapshot(); retainedSettings.RetainMeetingAudio = true;
+                var retainedCapture = new MeetingCapture(archive, retainedSettings, "Generated meeting", "en,es", "");
+                Saved(archive, retainedCapture.Document);
+                await retainedCapture.StopAsync(); retainedCapture.Dispose();
+                var retained = archive.Load(retainedCapture.Document.Id);
+                Check(retained is { Status: "Complete", RetainAudio: true } && retained.Segments.Count > 1 && archive.AudioBytes(retained.Id) > 0
+                    && archive.Unfinished().All(document => document.Document.Id != retained.Id),
+                    "with Retain processed audio on, Stop finalizes the same way and keeps the audio with the complete meeting, which is not offered as unfinished");
+                archive.Delete(retained.Id);
                 // Cancel while the final pass runs: at the microphone channel's first run, before the system channel.
                 var cancelled = new MeetingCapture(archive, settings, "Generated meeting", "en,es", "");
                 Saved(archive, cancelled.Document);
@@ -194,16 +205,16 @@ internal static class WorkspaceVerification
                 settings.RewriteEndpoint = "https://notes.invalid/v1"; settings.RewriteModel = "test-model";
                 settings.RewriteKeyVariable = "PRIVATE_FLOW_VERIFICATION_KEY_" + Guid.NewGuid().ToString("N"); settings.MeetingNotesStyle = MeetingNotesStyle.Extractive; settings.SaveAs(settings);
                 var notesCalls = 0; var notesRequest = ""; Func<CancellationToken, Task<string>> notesAnswer = _ => throw new InvalidOperationException("No notes answer is set.");
-                // The setup script is never run: this stands in for the installation of the meeting notes model, so nothing is downloaded.
-                var installs = 0; Func<IProgress<string>, CancellationToken, Task<string?>> installAnswer = (_, _) => throw new InvalidOperationException("No install answer is set.");
-                var panel = new MeetingsPanel(settings, microphoneChoice, outputChoice, messages.Add, (text, _) => notifications.Add(text), openShortcutSettings: () => shortcutSettingsOpened++,
-                    openNotesSettings: () => meetingSettingsOpened++, completeNotes: (_, user, token) => { notesCalls++; notesRequest = user; return notesAnswer(token); },
-                    installNotesModel: (progress, token) => { installs++; return installAnswer(progress, token); });
+                // The install of the meeting notes model runs only in the window, under Settings → Models; checked there with a stand-in for the
+                // setup script. Here its offers are inert, so nothing is downloaded.
+                var notesInstall = new NotesModelInstall(new(new() { Content = MeetingsPanel.NotesInstallLabel }, new()), new(new() { Content = MeetingsPanel.NotesInstallLabel }, new()), () => false, () => null);
+                var panel = new MeetingsPanel(settings, microphoneChoice, outputChoice, messages.Add, notesInstall, (text, _) => notifications.Add(text), openShortcutSettings: () => shortcutSettingsOpened++,
+                    openNotesSettings: () => meetingSettingsOpened++) { CompleteNotes = (_, user, token) => { notesCalls++; notesRequest = user; return notesAnswer(token); } };
                 // The Meetings page, the History page with its header search, the colour swatches and the meeting settings side by side, as one window shows them.
                 var pagesGrid = new Grid();
                 var historyColumn = new DockPanel(); DockPanel.SetDock(panel.HistorySearch, Dock.Top); historyColumn.Children.Add(panel.HistorySearch); historyColumn.Children.Add(panel.History);
-                // The notes style and the notes model's install row, which the window shows under Models.
-                var modelsColumn = WorkspacePages.Stack(panel.NotesStyleChoice, panel.ModelsListInstall.Button, panel.ModelsListInstall.Progress);
+                // The notes style, which the window shows under Models.
+                var modelsColumn = panel.NotesStyleChoice;
                 foreach (var (page, width) in new (FrameworkElement, double)[] { (panel, 420), (historyColumn, 860), (panel.SystemAudioColorChoice, 120), (panel.MeetingSettings.Content, 400), (modelsColumn, 400) })
                 { pagesGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width) }); Grid.SetColumn(page, pagesGrid.Children.Count); pagesGrid.Children.Add(page); }
                 var host = new Window { Content = pagesGrid, ShowActivated = false, Width = 1800, Height = 900, Left = SystemParameters.WorkArea.Left, Top = SystemParameters.WorkArea.Top };
@@ -521,65 +532,12 @@ internal static class WorkspaceVerification
                 Check(askedToSave && nothingSentUnsaved && notesCalls == 9 && notesRequest.Contains("Can we do the demo at noon?") && panelArchive.Load(design.Id).Segments[0].Text == "Can we do the demo at noon?",
                     $"Write notes with unsaved edits asks first; Cancel saves and sends nothing, Save and write notes saves the edits and writes the notes from that text (asked {askedToSave}, calls {notesCalls})");
                 panel.SelectedMeeting!.Segments[0].Text = savedRow; var restoredDesign = panelArchive.Load(design.Id); restoredDesign.Segments[0].Text = savedRow; panelArchive.Save(restoredDesign);
-                // The local model style without the model: an install action that names its size, shows its progress on the bar of the meeting
-                // progress, can be cancelled, says why it failed and, once done, turns into the write button. A stand-in replaces the setup script.
+                // The local model style with the meeting notes model in place, as its install under Models leaves it; the install itself is
+                // checked in the window, where Settings → Models runs it.
                 Descendants(host).OfType<System.Windows.Controls.RadioButton>().Single(option => Named(option) == "Meeting notes: Local model").IsChecked = true;
+                foreach (var file in new[] { settings.MeetingNotesEnginePath, settings.MeetingNotesModelPath }) { Directory.CreateDirectory(Path.GetDirectoryName(file)!); File.WriteAllText(file, ""); }
                 SaveMeetingPreferences();
                 SelectMeeting(supplier.Id); Tab("Notes").IsChecked = true;
-                var installLabel = $"Install the meeting notes model ({SpeechRuntime.Gigabytes(MeetingNotesModel.DownloadBytes)} GB)";
-                var offered = panel.NotesInstallState; var offeredWrite = panel.NotesState.WriteButton;
-                var installButtons = Descendants(host).OfType<System.Windows.Controls.Button>().Count(button => button.Content as string == installLabel);
-                Check(offered.Button == installLabel && offeredWrite is null && offered.Description!.Contains("nothing is downloaded before you press it") && offered.Progress is null && installButtons == 2 && installs == 0
-                    && !MeetingNotesModel.IsInstalled(settings),
-                    "with the local model style and no model, the Notes tab and the Local model choice under Models offer the install with its download size, and nothing is downloaded before the press");
-                System.Windows.Controls.Button NotesInstallButton() => Descendants(host).OfType<System.Windows.Controls.Button>().First(button => button.IsVisible && button.Content is string label
-                    && Named(button) == label && (label == installLabel || label == "Cancel installing") && Descendants(panel.History).Contains(button));
-                installAnswer = (progress, _) => { progress.Report("Downloading Qwen3.5-4B-Q4_K_M.gguf..."); return Task.FromResult<string?>(SpeechSetup.FailureMessage("Checksum mismatch; nothing installed.")); };
-                Press(NotesInstallButton());
-                await WaitAsync(() => panel.SettingsInstallState.Failure is not null, 5);
-                var installCard = panel.NotesState.Notices.FirstOrDefault();
-                var settingsInstallCard = panel.ModelsNotices.Notices.Find(NotesStatus.InstallFailedKey);
-                Check(installs == 1 && panel.NotesInstallState.Button == installLabel && KeysOf(panel.NotesState.Notices).SequenceEqual([NotesStatus.InstallFailedKey, NotesStatus.RuleBasedKey])
-                    && installCard is { Kind: NoticeKind.Error, Title: "The meeting notes model was not installed", Text: "Setup failed: Checksum mismatch; nothing installed." }
-                    && installCard.Detail!.EndsWith("Check network, available disk space and pinned download availability.")
-                    && panel.SettingsInstallState.Failure == "Setup failed: Checksum mismatch; nothing installed." && settingsInstallCard?.Detail == installCard.Detail && settingsInstallCard.Action?.Label == "Try again"
-                    && messages[^1] == "Installing the meeting notes model ended; Models and the Notes tab say how.",
-                    "a failed installation is an error card on the Notes tab, shortened with the whole reason as its detail, and under Models with Try again; the install is offered again");
-                var releaseInstall = new TaskCompletionSource();
-                installAnswer = async (progress, token) =>
-                {
-                    progress.Report("Downloading Qwen3.5-4B-Q4_K_M.gguf..."); progress.Report("Local model download: 42%");
-                    await releaseInstall.Task.WaitAsync(token);
-                    progress.Report("Local model download: 30%"); progress.Report("Expanding the runtime...");
-                    await Task.Delay(Timeout.Infinite, token); return null;
-                };
-                Press(NotesInstallButton());
-                await WaitAsync(() => panel.NotesInstallState.Share == .42, 5);
-                var installing = panel.NotesInstallState; var settingsInstalling = panel.SettingsInstallState;
-                releaseInstall.SetResult();
-                await WaitAsync(() => panel.NotesInstallState.Progress?.Contains("Expanding the runtime") == true, 5);
-                var laterStep = panel.NotesInstallState;
-                Press(NotesInstallButton());
-                await WaitAsync(() => panel.SettingsInstallState.Failure is not null, 5);
-                Check(installing.Button == "Cancel installing" && installing.Progress!.StartsWith("Installing the meeting notes model · Downloading Qwen3.5-4B-Q4_K_M.gguf · 42%") && installing.Description is null
-                    && settingsInstalling.Progress == installing.Progress && settingsInstalling.Share == .42
-                    && laterStep.Progress!.StartsWith("Installing the meeting notes model · Expanding the runtime · 42%") && laterStep.Share == .42
-                    && panel.NotesState.Notices[0] is { Key: NotesStatus.InstallFailedKey, Text: "Installing was cancelled." } && panel.NotesInstallState.Button == installLabel && panel.NotesInstallState.Progress is null,
-                    "while it installs, both places show the step and its share on the bar of the meeting progress next to Cancel installing; the bar never falls and holds its value through a step without a percentage, and Cancel says so");
-                installAnswer = (progress, _) =>
-                {
-                    progress.Report("Meeting notes model ready.");
-                    foreach (var file in new[] { settings.MeetingNotesEnginePath, settings.MeetingNotesModelPath }) { Directory.CreateDirectory(Path.GetDirectoryName(file)!); File.WriteAllText(file, ""); }
-                    return Task.FromResult<string?>(null);
-                };
-                Press(NotesInstallButton());
-                await WaitAsync(() => panel.NotesState.WriteButton is not null, 5);
-                var installedNotes = panel.NotesState; var installedOffer = panel.NotesInstallState;
-                var settingsInstalled = panel.ModelsListInstall.Button.Visibility == Visibility.Collapsed && panel.NotesChoiceInstall.Button.Visibility == Visibility.Collapsed;
-                Check(installs == 3 && installedNotes.WriteButton == "Write notes with the local model" && installedOffer.Button is null && installedOffer.Progress is null && KeysOf(installedNotes.Notices).SequenceEqual([NotesStatus.RuleBasedKey])
-                    && panel.SettingsInstallState is { Progress: null, Failure: null } && settingsInstalled
-                    && messages[^1] == "The meeting notes model is installed. Write notes with it on the Notes tab of a meeting.",
-                    "once installed, the Notes tab offers to write notes with the local model and Models no longer offers the install");
                 notesAnswer = async token => { await Task.Delay(Timeout.Infinite, token); return ""; };
                 Click("Write notes with the local model");
                 await Task.Delay(50);
@@ -683,9 +641,8 @@ internal static class WorkspaceVerification
                 Check(recordingEntries.Length == 1 && Named(recordingEntries[0]).Contains("Recording now") && meetingList.IsEnabled
                     && !Descendants(host).OfType<System.Windows.Controls.Button>().Single(button => Named(button) == "More meeting actions").IsEnabled,
                     "the meeting recording now is listed on the History page but cannot be selected; other meetings stay readable while their actions wait");
-                var installWhileRecording = Descendants(host).OfType<System.Windows.Controls.Button>().Single(button => button.Content as string == installLabel && !Descendants(panel.History).Contains(button)).IsEnabled;
-                Check(panel.IsCapturing && panel.PlaybackWarning is null && !Chip("Meeting microphone").IsEnabled && !Chip("Meeting languages").IsEnabled && !meetingTitle.IsEnabled && !installWhileRecording,
-                    $"a double click on Start meeting does not also stop it; while recording, the title, the chips and the install of the meeting notes model are disabled and a meeting on the Windows default output shows no notice (capturing {panel.IsCapturing}, notice {panel.PlaybackWarning ?? "none"}, last status {messages.LastOrDefault()})");
+                Check(panel.IsCapturing && panel.PlaybackWarning is null && !Chip("Meeting microphone").IsEnabled && !Chip("Meeting languages").IsEnabled && !meetingTitle.IsEnabled,
+                    $"a double click on Start meeting does not also stop it; while recording, the title and the chips are disabled and a meeting on the Windows default output shows no notice (capturing {panel.IsCapturing}, notice {panel.PlaybackWarning ?? "none"}, last status {messages.LastOrDefault()})");
                 var recording = new DispatcherWatchdog(); var buttonPeaks = new WavePeaks(pageWave);
                 await WaitAsync(() => panel.ShowsSilenceWarning, 30);
                 var warnedWhileRecording = panel.ShowsSilenceWarning;
@@ -1071,16 +1028,60 @@ internal static class WorkspaceVerification
             Capture(main, Path.Combine(output, "history-install.png"));
             Check(windowPanel.NotesInstallState.Button == $"Install the meeting notes model ({SpeechRuntime.Gigabytes(MeetingNotesModel.DownloadBytes)} GB)" && windowPanel.NotesState.WriteButton is null && !MeetingNotesModel.IsInstalled(Settings.Load()),
                 "in the window, the Notes tab offers to install the meeting notes model with its size while the local model style lacks it");
-            // The install with a stand-in for the setup script, in the window: its step and share on the bar of the meeting progress next to
-            // Cancel installing, on the Notes tab and under Models. Nothing is downloaded.
+            // The install runs under Settings → Models like every other one, here with a stand-in for the setup script: it names its size,
+            // shows its progress on the bar of the meeting progress, can be cancelled, says why it failed and, once done, turns into the write
+            // button. Nothing is downloaded.
+            var installLabel = MeetingsPanel.NotesInstallLabel;
+            var notesSetups = new List<string>();
+            Func<IProgress<string>, CancellationToken, Task<string?>> notesSetup = (_, _) => throw new InvalidOperationException("No install answer is set.");
+            main.Workspace.RunSetup = (script, arguments, token, progress) =>
+            {
+                notesSetups.Add(script + " " + string.Join(" ", arguments.TakeWhile(argument => argument != "-ResultFile")));
+                return notesSetup(progress!, token);
+            };
+            var offered = windowPanel.NotesInstallState;
+            Check(offered.Button == installLabel && windowPanel.NotesChoiceInstall.Button.Content as string == installLabel && offered.Description!.Contains("nothing is downloaded before you press it") && offered.Progress is null
+                && notesSetups.Count == 0 && !MeetingNotesModel.IsInstalled(main.SharedSettings),
+                "with the local model style and no model, the Notes tab and the Local model choice under Models offer the install with its download size, and nothing is downloaded before the press");
             System.Windows.Controls.Button WindowButton(string label) => Descendants(main).OfType<System.Windows.Controls.Button>().First(button => button.IsVisible && button.Content as string == label);
             void PressInWindow(string label) => WindowButton(label).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-            windowPanel.InstallNotesModel = async (progress, token) =>
+            notesSetup = (progress, _) => { progress.Report("Downloading Qwen3.5-4B-Q4_K_M.gguf..."); return Task.FromResult<string?>(SpeechSetup.FailureMessage("Checksum mismatch; nothing installed.")); };
+            PressInWindow(installLabel);
+            await WaitAsync(() => main.Workspace.NotesInstallInModels.Failure is not null, 5);
+            var installCard = windowPanel.NotesState.Notices.FirstOrDefault();
+            var settingsInstallCard = main.Workspace.ModelsNotices.Notices.Find(NotesStatus.InstallFailedKey);
+            Check(notesSetups.SequenceEqual(["setup-rewrite.ps1 -Part notes"]) && windowPanel.NotesInstallState.Button == installLabel && KeysOf(windowPanel.NotesState.Notices).SequenceEqual([NotesStatus.InstallFailedKey, NotesStatus.RuleBasedKey])
+                && installCard is { Kind: NoticeKind.Error, Title: "The meeting notes model was not installed", Text: "Setup failed: Checksum mismatch; nothing installed." }
+                && installCard.Detail!.EndsWith("Check network, available disk space and pinned download availability.")
+                && main.Workspace.NotesInstallInModels.Failure == "Setup failed: Checksum mismatch; nothing installed." && settingsInstallCard?.Detail == installCard.Detail && settingsInstallCard.Action?.Label == "Try again"
+                && Element<TextBlock>("Status").Text == "Installing the meeting notes model ended; Models and the Notes tab say how.",
+                "a failed installation is an error card on the Notes tab, shortened with the whole reason as its detail, and under Models with Try again; the install is offered again");
+            var notesFiles = new[] { main.SharedSettings.MeetingNotesEnginePath, main.SharedSettings.MeetingNotesModelPath };
+            notesSetup = (progress, _) =>
+            {
+                progress.Report("Meeting notes model ready.");
+                foreach (var file in notesFiles) { Directory.CreateDirectory(Path.GetDirectoryName(file)!); File.WriteAllText(file, ""); }
+                return Task.FromResult<string?>(null);
+            };
+            PressInWindow(installLabel);
+            await WaitAsync(() => windowPanel.NotesState.WriteButton is not null, 5);
+            var installedNotes = windowPanel.NotesState; var installedOffer = windowPanel.NotesInstallState;
+            bool Hidden(UIElement element) => Ancestors(element).Prepend(element).OfType<UIElement>().Any(shown => shown.Visibility == Visibility.Collapsed);
+            Check(notesSetups.Count == 2 && installedNotes.WriteButton == "Write notes with the local model" && installedOffer.Button is null && installedOffer.Progress is null && KeysOf(installedNotes.Notices).SequenceEqual([NotesStatus.RuleBasedKey])
+                && main.Workspace.NotesInstallInModels is { Progress: null, Failure: null } && Hidden(main.Workspace.ModelInstall(ModelCatalogue.NotesModel)) && Hidden(windowPanel.NotesChoiceInstall.Button)
+                && Element<TextBlock>("Status").Text == "The meeting notes model is installed. Write notes with it on the Notes tab of a meeting.",
+                "once installed, the Notes tab offers to write notes with the local model and Models no longer offers the install");
+            foreach (var file in notesFiles) File.Delete(file);
+            main.SharedSettings.SaveAs(main.SharedSettings); await Task.Delay(100);
+            var releaseNotesInstall = new TaskCompletionSource();
+            notesSetup = async (progress, token) =>
             {
                 progress.Report("Downloading Qwen3.5-4B-Q4_K_M.gguf..."); progress.Report("Local model download: 42%");
+                await releaseNotesInstall.Task.WaitAsync(token);
+                progress.Report("Local model download: 30%"); progress.Report("Expanding the runtime...");
                 await Task.Delay(Timeout.Infinite, token); return null;
             };
-            PressInWindow($"Install the meeting notes model ({SpeechRuntime.Gigabytes(MeetingNotesModel.DownloadBytes)} GB)");
+            PressInWindow(installLabel);
             await WaitAsync(() => windowPanel.NotesInstallState.Share == .42, 5); await Task.Delay(200);
             Capture(main, Path.Combine(output, "notes-install-progress.png"));
             var notesTabInstalling = windowPanel.NotesInstallState;
@@ -1089,12 +1090,20 @@ internal static class WorkspaceVerification
             var settingsBar = Descendants(main).OfType<SetupProgressView>().First(view => view.Shown && !Descendants(windowPanel.History).Contains(view));
             settingsBar.BringIntoView(new Rect(0, 0, settingsBar.ActualWidth, settingsBar.ActualHeight + 120)); await Task.Delay(300);
             Capture(main, Path.Combine(output, "settings-install-progress.png"));
-            var settingsInstallingInWindow = windowPanel.SettingsInstallState;
+            var settingsInstallingInWindow = main.Workspace.NotesInstallInModels;
+            releaseNotesInstall.SetResult();
+            await WaitAsync(() => windowPanel.NotesInstallState.Progress?.Contains("Expanding the runtime") == true, 5);
+            var laterStep = windowPanel.NotesInstallState;
             PressInWindow("Cancel installing");
-            await WaitAsync(() => windowPanel.SettingsInstallState.Failure is not null, 5);
+            await WaitAsync(() => main.Workspace.NotesInstallInModels.Failure is not null, 5);
+            main.Workspace.RunSetup = SpeechSetup.RunAsync;
             Check(notesTabInstalling is { Button: "Cancel installing", Share: .42 } && notesTabInstalling.Progress!.StartsWith("Installing the meeting notes model · Downloading Qwen3.5-4B-Q4_K_M.gguf · 42%")
-                && settingsInstallingInWindow.Progress == notesTabInstalling.Progress && settingsInstallingInWindow.Share == .42 && windowPanel.SettingsInstallState.Failure!.Contains("Installing was cancelled."),
+                && settingsInstallingInWindow.Progress == notesTabInstalling.Progress && settingsInstallingInWindow.Share == .42 && main.Workspace.NotesInstallInModels.Failure!.Contains("Installing was cancelled."),
                 "in the window, the install shows its step and share on the bar of the meeting progress next to Cancel installing, on the Notes tab and under Models");
+            Check(notesTabInstalling.Description is null && laterStep.Progress!.StartsWith("Installing the meeting notes model · Expanding the runtime · 42%") && laterStep.Share == .42
+                && windowPanel.NotesState.Notices[0] is { Key: NotesStatus.InstallFailedKey, Text: "Installing was cancelled." } && windowPanel.NotesInstallState.Button == installLabel
+                && windowPanel.NotesInstallState.Progress is null && notesSetups.Count == 3,
+                "while it installs, both places show the step and its share on the bar of the meeting progress next to Cancel installing; the bar never falls and holds its value through a step without a percentage, and Cancel says so");
             // The Notes tab in its states, with a stand-in for the notes model: rule-based with the caveat, nothing found, and a failed run
             // over notes written before. At most one yellow line in each.
             Descendants(main).OfType<System.Windows.Controls.RadioButton>().Single(option => System.Windows.Automation.AutomationProperties.GetName(option) == "Meeting notes: API").IsChecked = true;
@@ -1451,9 +1460,14 @@ internal static class WorkspaceVerification
             SyntheticSource screenshotMicrophone = new(longSpeech), screenshotPlayback = new([.. new float[16000], .. longSpeech]);
             // Started while History is shown, as the meeting shortcut does: the fallback card on the Meetings page is pointed to from where the user is.
             main.ShowPage("History"); await Task.Delay(100);
+            bool NotesInstallEnabled() => windowMeetings.NotesChoiceInstall.Button.IsEnabled && main.Workspace.ModelInstall(ModelCatalogue.NotesModel).IsEnabled;
+            bool NotesInstallDisabled() => !windowMeetings.NotesChoiceInstall.Button.IsEnabled && !main.Workspace.ModelInstall(ModelCatalogue.NotesModel).IsEnabled;
+            var notesInstallBeforeMeeting = NotesInstallEnabled();
             await windowMeetings.BeginAsync(active => active.Start([(screenshotMicrophone, "mic", "Synthetic microphone"), (screenshotPlayback, "system", "Synthetic playback")],
                 MeetingCapture.PlaybackFallbackNotice("synthetic-headset", "synthetic-playback", "Synthetic playback")));
             await WaitAsync(() => windowTranscript.Text.Length > 0, 60);
+            Check(notesInstallBeforeMeeting && windowMeetings.IsCapturing && NotesInstallDisabled(),
+                "in the window, the install of the meeting notes model under Models is enabled before a meeting and disabled while it records");
             var fallbackPointer = main.StatusPointerShown; var meetingsMarker = main.MarkerOf("Meetings");
             var statusHidden = !Element<TextBlock>("Status").IsVisible;
             // Transcribe file while the meeting records is refused on Dictate; History is in view, so the status line points there.
@@ -1757,10 +1771,12 @@ internal static class WorkspaceVerification
                 long Bytes(params string[] keys) => keys.Sum(key => ModelCatalogue.Model(key).Bytes);
                 var engineBytes = ModelCatalogue.Runtime("whisper-" + direct!.Backend).Bytes;
                 var transcriptionBytes = engineBytes + Bytes(new[] { direct.Model, direct.MeetingModel, direct.VoiceDetection }.Where(key => key.Length > 0).ToArray());
-                var localBytes = ModelList.DownloadBytes(Listed(ModelCatalogue.NotesModel), nvidia);
+                // Below 8 GB of memory no local processing model is recommended (ModelList.LocalProcessingMemory), as on a small test VM.
+                var localRecommended = shownRecommendation.Facts is not { Memory: > 0 and < ModelList.LocalProcessingMemory };
+                var localBytes = localRecommended ? ModelList.DownloadBytes(Listed(ModelCatalogue.NotesModel), nvidia) : 0;
                 Check(shownRecommendation.All == ($"Install recommended ({ModelList.Size(transcriptionBytes + localBytes)})", true)
                     && shownRecommendation.Transcription == ($"Install transcription models ({ModelList.Size(transcriptionBytes)})", true)
-                    && shownRecommendation.Local == ($"Install local processing models ({ModelList.Size(localBytes)})", true),
+                    && shownRecommendation.Local == (localRecommended ? ($"Install local processing models ({ModelList.Size(localBytes)})", true) : ("No local processing model recommended", false)),
                     $"with nothing installed, Install recommended, Install transcription models and Install local processing models are offered with their sizes ({shownRecommendation.All.Label}; {shownRecommendation.Transcription.Label}; {shownRecommendation.Local.Label})");
                 Capture(main, Path.Combine(output, "models-recommended-gpu.png"));
                 Check(workspace.ModelCards.Where(card => card.Card == "Transcription models").Select(card => card.Key).SequenceEqual([ModelCatalogue.SpeechTurbo, ModelCatalogue.SpeechMedium, ModelCatalogue.SpeechBase, ModelCatalogue.SpeechFinalPass, ModelCatalogue.VoiceDetection])
@@ -1787,19 +1803,18 @@ internal static class WorkspaceVerification
                 var releaseTranscription = new TaskCompletionSource();
                 workspace.RunSetup = async (script, arguments, token, progress) =>
                 {
+                    if (script == "setup-rewrite.ps1")
+                    {
+                        order.Add(script + " " + string.Join(" ", arguments.Take(2))); progress?.Report("Local model download: 50%");
+                        Touch(original.MeetingNotesEnginePath); Touch(original.MeetingNotesModelPath);
+                        return null;
+                    }
                     order.Add(script + " " + string.Join(" ", arguments.Take(4)));
                     progress?.Report("Downloading " + ModelCatalogue.Model(direct.Model).File + "...");
                     await releaseTranscription.Task.WaitAsync(token);
                     foreach (var key in new[] { direct.Model, direct.MeetingModel, direct.VoiceDetection }.Where(key => key.Length > 0)) Touch(ModelList.OwnFile(Listed(key)));
                     File.WriteAllText(directEngineMarker, ModelCatalogue.Runtime("whisper-" + direct.Backend).Sha256);
                     return null;
-                };
-                var installNotesBefore = windowPanel.InstallNotesModel;
-                windowPanel.InstallNotesModel = (progress, _) =>
-                {
-                    order.Add("setup-rewrite.ps1 -Part notes"); progress.Report("Local model download: 50%");
-                    Touch(original.MeetingNotesEnginePath); Touch(original.MeetingNotesModelPath);
-                    return Task.FromResult<string?>(null);
                 };
                 PressInWindow($"Install recommended ({ModelList.Size(transcriptionBytes + localBytes)})");
                 // The verification's speech paths were entered by hand, so the press first asks before Automatic replaces them.
@@ -1814,7 +1829,7 @@ internal static class WorkspaceVerification
                 releaseTranscription.SetResult();
                 await WaitAsync(() => workspace.RecommendedShown.All.Label == "Recommended models installed", 10);
                 var after = workspace.RecommendedShown;
-                workspace.RunSetup = SpeechSetup.RunAsync; windowPanel.InstallNotesModel = installNotesBefore;
+                workspace.RunSetup = SpeechSetup.RunAsync;
                 Check(switchQuestion.FirstOrDefault() == "Switch speech recognition to Automatic?" && switchQuestion.Skip(1).FirstOrDefault()?.Contains("the engine and model paths entered by hand") == true && startedBeforeAnswer == 0
                     && order.Count == 2 && order[0] == "setup-engine.ps1 -Backend auto -Model auto" && order[1] == "setup-rewrite.ps1 -Part notes"
                     && during.All == ("Cancel installing", true) && !during.Transcription.Enabled && !during.Local.Enabled
@@ -1878,8 +1893,6 @@ internal static class WorkspaceVerification
                     OthersLocked: !Descendants(main).OfType<System.Windows.Controls.Button>().Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Remove Whisper base").IsEnabled);
                 // One operation at a time: while the stand-in install is held, every other install, removal and Apply is pressed; none starts and
                 // none cancels the one that runs.
-                var notesInstallsMeanwhile = 0; var notesInstallKept = windowPanel.InstallNotesModel;
-                windowPanel.InstallNotesModel = (_, _) => { notesInstallsMeanwhile++; return Task.FromResult<string?>(null); };
                 void Click(System.Windows.Controls.Button button) => button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 var others = Descendants(main).OfType<System.Windows.Controls.Button>().Where(button => System.Windows.Automation.AutomationProperties.GetName(button) is { } name
                     && (name.StartsWith("Install ") && name != "Install Whisper medium" || name.StartsWith("Remove ") || name.StartsWith("Install recommended") || name.StartsWith("Install transcription")
@@ -1887,9 +1900,8 @@ internal static class WorkspaceVerification
                 var othersDisabled = others.All(button => !button.IsEnabled);
                 foreach (var button in others) Click(button);
                 await Task.Delay(300);
-                var gate = (Calls: setupArguments.Count, NotesInstalls: notesInstallsMeanwhile, StillRunning: workspace.ModelProgress(ModelCatalogue.SpeechMedium).Shown, Pressed: others.Count,
-                    NotesRefused: workspace.ModelsNotices.Notices.Find("notes-install-refused")?.Text, Question: ModelQuestion() is not null);
-                windowPanel.InstallNotesModel = notesInstallKept;
+                var gate = (Calls: setupArguments.Count, NotesInstalls: setupArguments.Count(call => call.StartsWith("setup-rewrite.ps1 -Part notes")), StillRunning: workspace.ModelProgress(ModelCatalogue.SpeechMedium).Shown,
+                    Pressed: others.Count, NotesRefused: workspace.ModelsNotices.Notices.Find("notes-install-refused")?.Text, Question: ModelQuestion() is not null);
                 releaseInstall.SetResult();
                 await WaitAsync(() => !workspace.ModelProgress(ModelCatalogue.SpeechMedium).Shown, 5); await Task.Delay(150);
                 workspace.ModelsNotices.Notices.Clear("notes-install-refused"); workspace.ModelsNotices.Notices.Clear("model-remove-refused");
@@ -1963,7 +1975,7 @@ internal static class WorkspaceVerification
                 var choiceUnsaved = main.UnsavedPreferenceSections.ToList();
                 var beforeSave = main.DictationSettings().LocalPolishModel;
                 var notesInstallNextToChoice = Descendants(main).OfType<System.Windows.Controls.Button>().Any(button => button.IsVisible && button.Content as string == $"Install ({ModelList.Size(MeetingNotesModel.DownloadBytes)})"
-                    && Descendants(main.Workspace.Models.Content).Contains(button) && button != windowPanel.ModelsListInstall.Button);
+                    && Descendants(main.Workspace.Models.Content).Contains(button) && button != workspace.ModelInstall(ModelCatalogue.NotesModel));
                 var polishChoiceBox = Descendants(main).OfType<System.Windows.Controls.ComboBox>().Single(box => System.Windows.Automation.AutomationProperties.GetName(box) == "Local polish model");
                 polishChoiceBox.BringIntoView(new Rect(0, -260, polishChoiceBox.ActualWidth, polishChoiceBox.ActualHeight + 400)); await Task.Delay(300);
                 Capture(main, Path.Combine(output, "models-polish-choice-missing.png"));
@@ -1987,11 +1999,15 @@ internal static class WorkspaceVerification
                 Element<System.Windows.Controls.RadioButton>("OutputLocal").IsChecked = true; await Task.Delay(150);
                 var notesPolishCard = Element<NoticeStack>("OutputNotices").Notices.Find("local-polish-not-set-up");
                 Capture(main, Path.Combine(output, "models-text-style-card.png"));
-                var installsFromCard = 0; var installNotesKept = windowPanel.InstallNotesModel;
-                windowPanel.InstallNotesModel = (_, _) => { installsFromCard++; return Task.FromResult<string?>("Stand-in install stopped; nothing was installed."); };
+                var installsFromCard = 0;
+                workspace.RunSetup = (script, arguments, _, _) =>
+                {
+                    if (script == "setup-rewrite.ps1" && arguments.Contains("notes")) installsFromCard++;
+                    return Task.FromResult<string?>("Stand-in install stopped; nothing was installed.");
+                };
                 notesPolishCard?.Action?.Invoke(); await Task.Delay(300);
                 var ledHere = main.SettingsSection == MainWindow.ModelsTitle;
-                windowPanel.InstallNotesModel = installNotesKept;
+                workspace.RunSetup = SpeechSetup.RunAsync;
                 // The installed Local polish model chosen and not saved does not reach the next dictation, so the card stays.
                 ChooseIn("Local polish model", nameof(LocalPolishModel.PolishModel)); await Task.Delay(150);
                 var cardWithUnsavedChoice = Element<NoticeStack>("OutputNotices").Notices.Find("local-polish-not-set-up") is not null

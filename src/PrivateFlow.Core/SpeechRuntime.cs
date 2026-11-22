@@ -21,7 +21,7 @@ public static class SpeechRuntime
         ? "Local speech processing failed: the decoder memory could not be allocated. Another program may be using the GPU memory."
         : $"Local speech processing failed (whisper code {code}).";
 
-    // GPU memory a model takes in use, from its file: measured on an RTX 4060 with the pinned runtime, large-v3-turbo-q8_0 took 1.38
+    // GPU memory a model takes in use, from its file: measured on an 8 GB NVIDIA GPU with the pinned runtime, large-v3-turbo-q8_0 took 1.38
     // and large-v3 with its eight-beam decoder cache 1.46 times its file size. Dictation decodes greedily and takes less.
     public static long GpuMemoryNeeded(long modelBytes) => modelBytes * 3 / 2;
 
@@ -51,6 +51,16 @@ public static class SpeechRuntime
         $"GPU memory was low ({Gigabytes(memory.Free)} of {Gigabytes(memory.Total)} GB free, about {Gigabytes(memory.Needed)} GB needed), so recognition may have been slower.";
 
     public static string Gigabytes(long bytes) => (bytes / 1e9).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+
+    // whisper.cpp's DLLs need the Microsoft Visual C++ 2015-2022 runtime (x64), which a fresh Windows lacks; Private Flow does not bring
+    // it. It is installed when its documented registry value Installed is 1 or its three DLLs are in System32.
+    public const string VisualCppDownload = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
+    public const string VisualCppRuntimeMissing = "Speech recognition needs the Microsoft Visual C++ Redistributable 2015-2022 (x64), which this PC does not have. "
+        + "Install it from Microsoft, " + VisualCppDownload + ", then try again.";
+    public static bool VisualCppRuntimePresent(object? registryInstalled, bool filesPresent) => registryInstalled is 1 || filesPresent;
+    // ERROR_MOD_NOT_FOUND (126) while loading the runtime: a DLL it needs is missing, on a fresh Windows the Visual C++ runtime.
+    public static string LoadFailedMessage(string file, int win32Error, string systemMessage, bool visualCppPresent) =>
+        win32Error == 126 && !visualCppPresent ? VisualCppRuntimeMissing : $"Could not load {file} from the speech runtime: {systemMessage}";
 
     public static string BlockedMessage(string file) =>
         $"Smart App Control blocked the local speech runtime while loading {file}. Windows rates unsigned files by cloud reputation, " +

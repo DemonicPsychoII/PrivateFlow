@@ -8,8 +8,9 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using NAudio.Wave;
 using PrivateFlow.Core;
+using PrivateFlow.Windows;
 
-namespace PrivateFlow.Windows;
+namespace PrivateFlow.Verification;
 
 // A dictation case is one recording with the words spoken (Reference) and, when the on-device edits change
 // them, the text Clean and the rewrite styles should produce (Edited). Critical items are marked in square brackets.

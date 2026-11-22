@@ -26,6 +26,8 @@ public sealed class MeetingDocument
     // Empty before the transcript is final and in meetings from earlier versions.
     public string TranscriptModel { get; set; } = "";
     public string ModelFallback { get; set; } = "";
+    // Seconds of listed audio the final pass found missing that had no live preview either, so the transcript has a gap there.
+    public double MissingAudioSeconds { get; set; }
     // Null until a model writes notes for this meeting, and in meetings saved before such notes were kept.
     public MeetingWrittenNotes? WrittenNotes { get; set; }
     public List<MeetingChunk> Chunks { get; set; } = [];
@@ -137,6 +139,11 @@ public sealed partial class MeetingArchive
         "Finalizing" => "Private Flow ended unexpectedly while finishing its transcript, such as in a crash.",
         _ => document.UnfinishedReason ?? ""
     };
+    // Listed chunks whose audio is gone and that no live preview covered; audio with a preview keeps its preview text.
+    public static double MissingAudioSeconds(MeetingDocument document, IReadOnlySet<MeetingChunk> present) =>
+        document.Chunks.Where(chunk => !chunk.Transcribed && !present.Contains(chunk)).Sum(chunk => chunk.Duration);
+    public static string DescribeMissingAudio(MeetingDocument document) =>
+        $"{Math.Ceiling(document.MissingAudioSeconds):0} s of the recorded audio was missing when the transcript was finished, so that part is not in the transcript.";
     public long AudioBytes(string id) => AudioFiles(id).Sum(file => new FileInfo(file).Length);
     // Every audio file of the meeting: listed and unlisted chunks and chunk writes a crash left unfinished.
     public void DeleteAudio(string id) { foreach (var file in AudioFiles(id)) File.Delete(file); }
@@ -295,6 +302,7 @@ public sealed partial class MeetingArchive
     public static string Notes(MeetingDocument document) => ExtractiveNotes.Write(document);
     // What a reader must know before the notes: that the speech model stood in for the meeting model, and channels that stayed silent.
     public static string Caveats(MeetingDocument document) => (string.IsNullOrEmpty(document.ModelFallback) ? "" : document.ModelFallback + "\n\n") +
+        (document.MissingAudioSeconds > 0 ? DescribeMissingAudio(document) + "\n\n" : "") +
         string.Concat(SilentChannels(document).Select(channel => DescribeSilence(document, channel) + "\n\n"));
     private static readonly HashSet<string> StopWords = new(StringComparer.Ordinal) { "what", "when", "where", "who", "why", "how", "the", "was", "were", "is", "are", "did", "do", "we", "in", "on", "of", "to", "about", "meeting", "meetings", "and", "or", "a", "an", "der", "die", "das", "was", "wer", "wie", "wann", "wo", "ist", "sind", "haben", "wir", "und", "zu", "den", "dem", "ein", "eine", "über" };
 }

@@ -12,9 +12,11 @@ public static class WhisperEngine
     // The GPU memory when the loaded model did not fit the free memory and loaded anyway; null otherwise.
     internal static GpuMemory? LowMemory => Worker.LowMemory;
     public static void UnloadIfIdle() => Worker.UnloadIfIdle();
+    internal static TimeProvider Clock { get => Worker.Clock; set => Worker.Clock = value; }
     public static Task UnloadAsync() => Worker.UnloadAsync();
     public static Task LoadAsync(Settings settings, CancellationToken token, Action<GpuMemory>? loadingWithLowMemory = null) => Worker.LoadAsync(settings, token, loadingWithLowMemory);
     public static void Shutdown() => Worker.Dispose();
+    public static Task<IDisposable> ReserveAsync(CancellationToken token) => Worker.ReserveAsync(token);
     public static Task<SpeechResult> TranscribeChunkAsync(float[] samples, Settings settings, CancellationToken token, string languages = "", int beamSize = 0) =>
         Worker.TranscribeAsync(samples, settings, token, languages, beamSize);
     public static async Task<IReadOnlyDictionary<string, double>> DetectLanguageAsync(float[] samples, Settings settings, string languages, CancellationToken token) =>

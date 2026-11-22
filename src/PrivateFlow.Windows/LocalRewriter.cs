@@ -155,6 +155,18 @@ internal static class LocalRewriter
         if (!Gate.Wait(0)) return false;
         try { Shutdown(); return true; } finally { Gate.Release(); }
     });
+    public const string SetupTask = "the setup of a local model";
+    public const string RuntimeInPlace = "Local model runtime is in place.";
+    // For a setup that extracts over the local model runtimes: both servers stop and the shared lock stays held, so a dictation waits for
+    // the setup as it waits for notes, until the lease is disposed; null while another task holds the lock.
+    public static Task<IDisposable?> ReserveForSetupAsync() => Task.Run<IDisposable?>(() =>
+    {
+        if (!Gate.Wait(0)) return null;
+        running = SetupTask;
+        var lease = new Lease(Gate);
+        try { Shutdown(); return lease; }
+        catch { lease.Dispose(); throw; }
+    });
 
     // One llama-server process; callers hold the shared lock.
     private sealed class LocalServer

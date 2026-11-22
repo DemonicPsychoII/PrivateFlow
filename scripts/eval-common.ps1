@@ -6,6 +6,8 @@ $EvalRepository = Split-Path $PSScriptRoot -Parent
 $EvalArtifacts = Join-Path $EvalRepository 'artifacts'
 $EvalAssets = Join-Path $EvalArtifacts 'test-assets'
 $EvalClips = Join-Path $EvalArtifacts 'eval-clips'
+# Where a run writes its data folders, reports and summaries; scripts/verify.ps1 gives every job its own.
+$EvalOutput = $(if ($env:PRIVATE_FLOW_EVAL_OUTPUT) { [IO.Path]::GetFullPath($env:PRIVATE_FLOW_EVAL_OUTPUT) } else { $EvalArtifacts })
 
 # Test-only text-to-speech and real speech. Never shipped with the app and never redistributed; licences in docs\TEST_COVERAGE.md.
 $EvalPiper = @{ Url = 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip'; File = 'piper_windows_amd64.zip'; Hash = 'f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea' }
@@ -97,16 +99,18 @@ function Invoke-Synthesis {
         $lines = foreach ($job in $group.Group) {
             $request = [ordered]@{ text = $job.Text }
             if (-not $single) { $request.speaker_id = $(if ($named.Success) { [int]$named.Groups[1].Value } else { [int]$name }) }
-            $request.output_file = "$($job.File).partial.wav"
+            $request.output_file = "$($job.File).$PID.partial.wav"
             ConvertTo-Json -Compress -InputObject $request
         }
-        $jobFile = Join-Path $EvalClips 'jobs-piper.jsonl'
+        # Per process, in case two evaluations synthesize at once; the clip that arrives first is kept.
+        $jobFile = Join-Path $EvalClips "jobs-piper-$PID.jsonl"
         [IO.File]::WriteAllLines($jobFile, [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
         & cmd.exe /d /c "`"$piper`" --model `"$model`" --length_scale $scale --json-input --quiet < `"$jobFile`" > nul"
         if ($LASTEXITCODE -ne 0) { throw "Piper failed for $($group.Name)." }
         foreach ($job in $group.Group) {
-            if (-not (Test-Path -LiteralPath "$($job.File).partial.wav") -or (Get-Item -LiteralPath "$($job.File).partial.wav").Length -lt 1000) { throw "Piper produced no audio for '$($job.Text)'." }
-            Move-Item -LiteralPath "$($job.File).partial.wav" -Destination $job.File -Force
+            $partial = "$($job.File).$PID.partial.wav"
+            if (-not (Test-Path -LiteralPath $partial) -or (Get-Item -LiteralPath $partial).Length -lt 1000) { throw "Piper produced no audio for '$($job.Text)'." }
+            try { Move-Item -LiteralPath $partial -Destination $job.File } catch { if (-not (Test-Path -LiteralPath $job.File)) { throw }; Remove-Item -LiteralPath $partial }
         }
     }
 }
@@ -178,12 +182,39 @@ function Write-EvalSettings([string]$Data, $Engine, [string]$Language, [bool]$Sp
     # UTF-8 so names such as Joaquín survive; Windows PowerShell's default would write the ANSI code page.
     ConvertTo-Json -InputObject $settings -Depth 4 | Set-Content -LiteralPath (Join-Path $Data 'settings.json') -Encoding UTF8
 }
+# One desktop run per Windows session (AGENTS.md): every entry point that takes the foreground, the clipboard or the keyboard
+# (every desktop suite and every desktop job of verify.ps1) runs its work through here, under a mutex of this session (Local\). The
+# holder's child processes inherit PRIVATE_FLOW_DESKTOP_SESSION, its process ID, and run under its lock instead of waiting for it.
+# A holder that ended without releasing leaves the mutex abandoned, which counts as free.
+function Invoke-DesktopSession([scriptblock]$Action, [TimeSpan]$Wait = [TimeSpan]::FromHours(2)) {
+    $holder = "$env:PRIVATE_FLOW_DESKTOP_SESSION"
+    if ($holder -match '^\d+$' -and (Get-Process -Id ([int]$holder) -ErrorAction SilentlyContinue)) { return & $Action }
+    $lock = New-Object Threading.Mutex($false, 'Local\PrivateFlow-desktop-session')
+    try { $owned = $lock.WaitOne($Wait) } catch [Threading.AbandonedMutexException] { $owned = $true }
+    if (-not $owned) { $lock.Dispose(); throw "Another desktop run held this Windows session for $([int]$Wait.TotalMinutes) minutes; nothing ran." }
+    $env:PRIVATE_FLOW_DESKTOP_SESSION = "$PID"
+    try { & $Action } finally { $env:PRIVATE_FLOW_DESKTOP_SESSION = $holder; $lock.ReleaseMutex(); $lock.Dispose() }
+}
 function Get-EvalApp([string]$App) {
     if (-not $App) { $App = Join-Path $EvalArtifacts 'app\PrivateFlow.exe' }
     if (-not (Test-Path -LiteralPath $App -PathType Leaf)) { throw "No Private Flow package at $App. Run scripts\build.ps1 -Portable first." }
     $App
 }
-# Runs a gated mode of the package against an isolated data folder and returns its JSON report.
+# The verification host, PrivateFlow.Verification.exe, runs the verification and evaluation modes; the package no longer has them. It
+# is built beside the package in artifacts\verification. Given the package's PrivateFlow.exe, as these scripts took before, the host
+# built beside that package is used.
+function Get-VerificationHost([string]$App) {
+    if (-not $App) { $App = Join-Path $EvalArtifacts 'verification\PrivateFlow.Verification.exe' }
+    elseif ([IO.Path]::GetFileName($App) -eq 'PrivateFlow.exe') { $App = Join-Path (Split-Path (Split-Path $App -Parent) -Parent) 'verification\PrivateFlow.Verification.exe' }
+    if (-not (Test-Path -LiteralPath $App -PathType Leaf)) { throw "No verification host at $App. Run scripts\build.ps1 -Portable first." }
+    # The host beside a package checks that package's build only.
+    $taskPackage = Join-Path (Split-Path (Split-Path $App -Parent) -Parent) 'app\PrivateFlow.dll'
+    if ((Test-Path -LiteralPath $taskPackage) -and (Get-FileHash -LiteralPath $taskPackage).Hash -ne (Get-FileHash -LiteralPath (Join-Path (Split-Path $App -Parent) 'PrivateFlow.dll')).Hash) {
+        throw "The verification host at $App was built from another build than the package beside it. Run scripts\build.ps1 -Portable again."
+    }
+    $App
+}
+# Runs a gated mode of the verification host against an isolated data folder and returns its JSON report.
 function Invoke-EvalMode([string]$App, [string]$Mode, [string]$InputPath, [string]$Report, [string]$Data, [int]$TimeoutMinutes = 120, [string[]]$Extra = @()) {
     if (Test-Path -LiteralPath $Report) { Remove-Item -LiteralPath $Report }
     $previous = $env:PRIVATE_FLOW_DATA_DIR

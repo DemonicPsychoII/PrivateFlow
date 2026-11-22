@@ -119,6 +119,9 @@ public enum DictationInsertion
     // It waited for another task, maybe minutes: pasted only if the selected window is still in front by itself, without bringing it
     // back, and otherwise the clipboard is left alone.
     PasteAfterWait,
+    // Automatic insertion is refused in this instance: the test build outside the disposable test VM, or a diagnostic instance. It stays
+    // on the Dictate page with the not-pasted notice; nothing is pasted or copied.
+    PasteRefused,
 }
 
 // Every change of a dictation's state and what it does. The controller carries out the actions and holds the resources.
@@ -203,11 +206,17 @@ public static class DictationTable
     public static bool IsBusy(DictationState state) => state is Transcribing or WaitingForNotes or PolishingAfterWait or Pasting or Cancelling or TranscribingFile;
     public static bool IsQueued(DictationState state) => state is WaitingForNotes or PolishingAfterWait;
 
-    public static DictationInsertion Insertion(bool polishSkipped, string text, bool autoInsert, bool waited) =>
+    // pasteAllowed: this instance may paste into other apps (PasteAllowed below).
+    public static DictationInsertion Insertion(bool polishSkipped, string text, bool autoInsert, bool waited, bool pasteAllowed = true) =>
         polishSkipped ? DictationInsertion.KeepClean
         : string.IsNullOrWhiteSpace(text) ? DictationInsertion.NothingRecognized
         : !autoInsert ? DictationInsertion.Review
+        : !pasteAllowed ? DictationInsertion.PasteRefused
         : waited ? DictationInsertion.PasteAfterWait : DictationInsertion.Paste;
+    // The app pastes; the test build (an audio library in place of the microphone) only in the disposable test VM, a diagnostic instance
+    // of the verification host never: pastes into real apps belong in the VM (AGENTS.md).
+    public static bool PasteAllowed(bool testBuild, bool diagnostic, bool inTestVm) => !diagnostic && (!testBuild || inTestVm);
     public static bool RestoresForeground(DictationInsertion insertion) => insertion == DictationInsertion.Paste;
-    public static bool CopiesWhenNotPasted(DictationInsertion insertion) => insertion == DictationInsertion.Paste;
+    // A clipboard the paste could not save is never replaced by the copy either (clipboardUnreadable).
+    public static bool CopiesWhenNotPasted(DictationInsertion insertion, bool clipboardUnreadable = false) => insertion == DictationInsertion.Paste && !clipboardUnreadable;
 }

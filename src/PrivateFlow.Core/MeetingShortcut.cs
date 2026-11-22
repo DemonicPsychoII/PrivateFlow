@@ -8,10 +8,11 @@ public readonly record struct MeetingShortcutDecision(MeetingShortcutAction Acti
 // refused with a reason for a tray notice, because the window may be hidden.
 public static class MeetingShortcut
 {
-    public static MeetingShortcutDecision Decide(bool diagnostic, bool capturing, bool finishing, bool dictationActive, bool otherOperation) =>
+    public static MeetingShortcutDecision Decide(bool diagnostic, bool capturing, bool finishing, bool dictationActive, bool otherOperation, bool updating = false) =>
         diagnostic ? Refuse("Diagnostic instance: the meeting shortcut does not record.")
         : finishing ? Refuse("A meeting transcript is being finished. Press the meeting shortcut again once it is saved.")
         : capturing ? new(MeetingShortcutAction.Stop)
+        : updating ? Refuse(UpdateGate.StartRefusal)
         : dictationActive ? Refuse("Dictation is running. Press the meeting shortcut again once it has finished.")
         : otherOperation ? Refuse("Speech recognition is being set up or checked under Settings. Press the meeting shortcut again once it has finished.")
         : new(MeetingShortcutAction.Start);

@@ -3,8 +3,9 @@ using System.IO;
 using System.Text.Json;
 using NAudio.Wave;
 using PrivateFlow.Core;
+using PrivateFlow.Windows;
 
-namespace PrivateFlow.Windows;
+namespace PrivateFlow.Verification;
 
 // A scenario describes a meeting as clips placed on the mic and system channels, each with a
 // reference text whose critical items are marked in square brackets.

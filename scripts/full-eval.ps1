@@ -11,11 +11,11 @@ param(
     # The backends -Full sets up; cpu runs take several hours on a laptop.
     [string[]]$Backends = @('cuda12', 'cpu'),
     [string]$App = '',
-    # Your own recordings (docs\TEST_COVERAGE.md), finished with the recommended setup and scored with counts only.
+    # Your own recordings, finished with the recommended setup and scored with counts only.
     [string]$Recordings = $env:PRIVATE_FLOW_EVALUATION_RECORDINGS
 )
 . (Join-Path $PSScriptRoot 'eval-common.ps1')
-$taskRoot = Join-Path $EvalArtifacts 'full-eval'
+$taskRoot = Join-Path $EvalOutput 'full-eval'
 $taskStarted = Get-Date
 if (Test-Path -LiteralPath $taskRoot) { Remove-Item -LiteralPath $taskRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $taskRoot | Out-Null
@@ -46,13 +46,14 @@ Invoke-Step 'Uninstall script (fake installations in TEMP)' {
     "$($Matches[1]) checks passed"
 }
 $App = Get-EvalApp $App
+$Verification = Get-VerificationHost $App
 $taskInstalled = Get-InstalledEngine
 Invoke-Step 'Smoke test (installed engine, synthetic speech)' { $null = Invoke-Script 'smoke-test.ps1' @('-App', $App); 'negation and number kept' }
 Invoke-Step 'Workspace verification (--verify-workspace)' {
     $data = Join-Path $taskRoot 'workspace-data'; $output = Join-Path $taskRoot 'workspace'
     Write-EvalSettings $data $taskInstalled 'auto' $true
     $previous = $env:PRIVATE_FLOW_DATA_DIR
-    try { $env:PRIVATE_FLOW_DATA_DIR = $data; $process = Start-Process -FilePath $App -ArgumentList @('--verify-workspace', "`"$output`"") -WindowStyle Hidden -PassThru } finally { $env:PRIVATE_FLOW_DATA_DIR = $previous }
+    try { $env:PRIVATE_FLOW_DATA_DIR = $data; $process = Start-Process -FilePath $Verification -ArgumentList @('--verify-workspace', "`"$output`"") -WindowStyle Hidden -PassThru } finally { $env:PRIVATE_FLOW_DATA_DIR = $previous }
     if (-not $process.WaitForExit(600000)) { $process.Kill(); throw 'Workspace verification timed out.' }
     $result = Get-Content -LiteralPath (Join-Path $output 'result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $result.Passed) { throw "Workspace verification failed after $(@($result.Checks).Count) checks: $($result.Error)" }
@@ -62,9 +63,9 @@ if ($DesktopChecks) {
     foreach ($taskMode in '--verify-overlay', '--verify-insert') {
         Invoke-Step "Desktop check $taskMode" {
             $output = Join-Path $taskRoot $taskMode.TrimStart('-')
-            # The app runs these modes only with an isolated data folder; the insertion fixture it starts inherits it.
+            # The verification host runs these modes only with an isolated data folder; the insertion fixture it starts inherits it.
             $previous = $env:PRIVATE_FLOW_DATA_DIR
-            try { $env:PRIVATE_FLOW_DATA_DIR = Join-Path $taskRoot 'desktop-data'; $process = Start-Process -FilePath $App -ArgumentList @($taskMode, "`"$output`"") -PassThru } finally { $env:PRIVATE_FLOW_DATA_DIR = $previous }
+            try { $env:PRIVATE_FLOW_DATA_DIR = Join-Path $taskRoot 'desktop-data'; $process = Start-Process -FilePath $Verification -ArgumentList @($taskMode, "`"$output`"") -PassThru } finally { $env:PRIVATE_FLOW_DATA_DIR = $previous }
             if (-not $process.WaitForExit(120000)) { $process.Kill(); throw "$taskMode timed out." }
             $file = Get-ChildItem -LiteralPath $output -Filter '*result.txt' | Select-Object -First 1
             $text = Get-Content -LiteralPath $file.FullName -Raw
@@ -72,7 +73,7 @@ if ($DesktopChecks) {
             ($text -split "`n" | Where-Object { $_ -match 'PASS' }).Count.ToString() + ' passed'
         }
     }
-    Invoke-Step 'UI smoke test (UI Automation, isolated data)' { $null = Invoke-Script 'ui-smoke-test.ps1' @('-App', $App); 'passed' }
+    Invoke-Step 'UI smoke test (UI Automation, isolated data)' { $null = Invoke-Script 'ui-smoke-test.ps1' @('-App', $Verification); 'passed' }
 }
 
 # The engines to measure: the installed one (read only) and, with -Full, every pinned backend and model in an isolated root.
@@ -105,9 +106,9 @@ if ($Full) {
 $taskDictation = $(if ($Full) { @('auto', 'auto-no-detection', 'fixed', 'fixed-no-detection') } else { @('auto', 'auto-no-detection', 'fixed') })
 $taskRealSpeech = $(if ($Full) { 40 } else { 25 })
 foreach ($taskEngine in $taskEngines) {
-    $taskEngineArguments = @('-App', $App, '-EnginePath', $taskEngine.EnginePath, '-ModelPath', $taskEngine.ModelPath, '-VadModelPath', $taskEngine.VadModelPath, '-EngineLabel', $taskEngine.Label) +
+    $taskEngineArguments = @('-App', $Verification, '-EnginePath', $taskEngine.EnginePath, '-ModelPath', $taskEngine.ModelPath, '-VadModelPath', $taskEngine.VadModelPath, '-EngineLabel', $taskEngine.Label) +
         $(if ($taskEngine.MeetingModelPath) { @('-MeetingModelPath', $taskEngine.MeetingModelPath) } else { @() })
-    # On the CPU, medium and large-v3-turbo take about 1.8 s per second of audio on this laptop; they get the shipped
+    # On the CPU, medium and large-v3-turbo take about 1.8 s per second of audio on a laptop processor; they get the shipped
     # configuration with fewer real utterances and the meeting scenarios closest to the mixed-channel scenarios.
     $taskSlow = $taskEngine.Label -match '^cpu-(medium|large)'
     Invoke-Step "Dictation accuracy $($taskEngine.Label)" {
@@ -149,7 +150,7 @@ function Format-Tally($tally) {
         (100 * ($tally.Matched + $tally.Formatting) / $tally.Words), $(if ($tally.Items) { 100 * ($tally.Recalled + $tally.ItemFormatting) / $tally.Items } else { 100 })
 }
 $taskRows = New-Object System.Collections.Generic.List[object]
-foreach ($taskFile in Get-ChildItem -LiteralPath (Join-Path $EvalArtifacts 'meeting-eval\reports') -Filter '*.json' -ErrorAction SilentlyContinue | Where-Object LastWriteTime -ge $taskStarted) {
+foreach ($taskFile in Get-ChildItem -LiteralPath (Join-Path $EvalOutput 'meeting-eval\reports') -Filter '*.json' -ErrorAction SilentlyContinue | Where-Object LastWriteTime -ge $taskStarted) {
     $report = Get-Content -LiteralPath $taskFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
     $sets = [ordered]@{ synthetic = (New-Tally); 'mixed-channel' = (New-Tally); real = (New-Tally) }
     $languages = @{}
@@ -165,7 +166,7 @@ foreach ($taskFile in Get-ChildItem -LiteralPath (Join-Path $EvalArtifacts 'meet
     }
     $taskRows.Add([pscustomobject]@{ Kind = 'meeting'; Configuration = "$($taskFile.BaseName) ($(@($report.Scenarios).Count))"; Sets = $sets; Languages = $languages; Checks = $null })
 }
-foreach ($taskFile in Get-ChildItem -LiteralPath (Join-Path $EvalArtifacts 'dictation-eval\reports') -Filter '*.json' -ErrorAction SilentlyContinue | Where-Object LastWriteTime -ge $taskStarted) {
+foreach ($taskFile in Get-ChildItem -LiteralPath (Join-Path $EvalOutput 'dictation-eval\reports') -Filter '*.json' -ErrorAction SilentlyContinue | Where-Object LastWriteTime -ge $taskStarted) {
     $report = Get-Content -LiteralPath $taskFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
     $sets = [ordered]@{ synthetic = (New-Tally); 'synthetic Clean' = (New-Tally); real = (New-Tally) }
     $languages = @{}
@@ -207,7 +208,7 @@ foreach ($taskRow in $taskRows) {
 Out-Summary ''
 foreach ($taskRow in $taskRows | Where-Object Kind -eq 'dictation') { Out-Summary "End-to-end feature checks $($taskRow.Configuration): $($taskRow.Checks) (depend on the recognized text; details in the dictation summary)" }
 # The meeting goals of docs\VALIDATION.md for the installed engine and the recommended GPU setup.
-$taskReportFolder = Join-Path $EvalArtifacts 'meeting-eval\reports'
+$taskReportFolder = Join-Path $EvalOutput 'meeting-eval\reports'
 function Read-Report([string]$name) { $file = Join-Path $taskReportFolder $name; if ((Test-Path -LiteralPath $file) -and (Get-Item -LiteralPath $file).LastWriteTime -ge $taskStarted) { Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json } }
 foreach ($taskTarget in @(@('installed engine', $taskInstalled.Label), @('recommended GPU setup', 'cuda12-large-v3-turbo-q8_0+large-v3'))) {
     $taskFinal = Read-Report "$($taskTarget[1])-piper-auto.json"

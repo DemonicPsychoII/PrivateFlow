@@ -1,6 +1,6 @@
 # Checks scripts\uninstall.ps1 against fake default installations in a throwaway folder under %TEMP%. Windows only, not in
 # CI; run it with Windows PowerShell and with PowerShell 7 (the uninstaller runs in the same shell). It never touches this
-# PC's real Private Flow: Invoke-Uninstaller always points LOCALAPPDATA, TEMP and TMP into the throwaway folder (another
+# PC's real Private Flow: Invoke-Uninstaller always points LOCALAPPDATA, USERPROFILE, TEMP and TMP into the throwaway folder (another
 # LOCALAPPDATA only with -WhatIf), passes a throwaway Start menu shortcut and registry key, and running programs are
 # stand-ins built here. The folder and key are removed after every run, also after a failure.
 [CmdletBinding()]
@@ -55,14 +55,18 @@ function Test-Running([int]$ProcessId) { [bool](Get-Process -Id $ProcessId -Erro
 function New-Fixture([string]$Name) {
     $base = Join-Path $testRoot $Name
     $fake = [pscustomobject]@{ Base = $base; Local = "$base\Local"; Install = "$base\Local\Programs\PrivateFlow"; Data = "$base\Local\PrivateFlow"
-        Temp = "$base\Temp"; Shortcut = "$base\StartMenu\Private Flow.lnk"; Key = "$testKey\$Name"; Outside = "$base\Outside" }
+        Temp = "$base\Temp"; Shortcut = "$base\StartMenu\Private Flow.lnk"; Key = "$testKey\$Name"; Outside = "$base\Outside"
+        Evaluation = "$base\PrivateFlowEvaluation"; Clips = "$base\PrivateFlowEvaluation\dictation-clips" }
     foreach ($folder in "$($fake.Install)\scripts", "$($fake.Install).old-0123abcd", "$($fake.Local)\Programs\SomeOtherApp", "$($fake.Data)\models", "$($fake.Data)\runtime\rewrite",
-        "$($fake.Data)\meetings\$('a' * 32)", "$($fake.Data)\meetings\$('b' * 32)", $fake.Temp, "$($fake.Temp)\PrivateFlow-install-$('c' * 32)", "$($fake.Outside)\target", (Split-Path $fake.Shortcut)) {
+        "$($fake.Data)\meetings\$('a' * 32)", "$($fake.Data)\meetings\$('b' * 32)", $fake.Temp, "$($fake.Temp)\PrivateFlow-install-$('c' * 32)", "$($fake.Outside)\target", (Split-Path $fake.Shortcut),
+        "$($fake.Clips)\own-20261119-100000-000", "$($fake.Clips)\own-20261119-100500-000", "$($fake.Evaluation)\recordings") {
         New-Item -ItemType Directory -Force -Path $folder | Out-Null
     }
     foreach ($file in "$($fake.Install)\PrivateFlow.exe", "$($fake.Install)\PrivateFlow.dll", "$($fake.Install).old-0123abcd\PrivateFlow.exe", "$($fake.Data)\settings.json",
         "$($fake.Data)\models\ggml-base.bin", "$($fake.Data)\meetings\$('a' * 32)\mic-000000.wav", "$($fake.Data)\put-there-by-hand.txt", "$($fake.Temp)\PrivateFlow-update-$('d' * 32).ps1",
-        "$($fake.Temp)\unrelated.txt", "$($fake.Local)\Programs\SomeOtherApp\keep.txt", "$($fake.Outside)\target\keep.txt") { Set-Content -LiteralPath $file -Value 'x' }
+        "$($fake.Temp)\unrelated.txt", "$($fake.Local)\Programs\SomeOtherApp\keep.txt", "$($fake.Outside)\target\keep.txt",
+        "$($fake.Clips)\own-20261119-100000-000\manifest.json", "$($fake.Clips)\own-20261119-100000-000\audio.wav", "$($fake.Clips)\own-20261119-100500-000\manifest.json",
+        "$($fake.Clips)\own-20261119-100500-000\audio.wav", "$($fake.Evaluation)\recordings\keep.txt") { Set-Content -LiteralPath $file -Value 'x' }
     Copy-Item -LiteralPath $uninstaller -Destination "$($fake.Install)\scripts\uninstall.ps1"
     New-Item -ItemType Junction -Path "$($fake.Data)\models\linked" -Target "$($fake.Outside)\target" | Out-Null
     Set-Shortcut $fake.Shortcut "$($fake.Install)\PrivateFlow.exe"
@@ -84,14 +88,15 @@ function Test-NothingRemoved($Before, $Fake) { $after = Get-Snapshot $Fake; @($B
 # the fixture and the answer on standard input; -AtPrompt runs once the confirmation is asked for. A LOCALAPPDATA outside
 # the test folder, or none, is refused unless the run is -WhatIf.
 function Invoke-Uninstaller($Fake, [string[]]$Flags = @(), [string]$Answer = '', [string]$Script = $uninstaller, [hashtable]$Environment = @{}, [scriptblock]$AtPrompt) {
-    $variables = @{ LOCALAPPDATA = $Fake.Local; TEMP = $Fake.Temp; TMP = $Fake.Temp }
+    # USERPROFILE too: the kept test clips are under it, and no run may reach the real ones.
+    $variables = @{ LOCALAPPDATA = $Fake.Local; USERPROFILE = $Fake.Base; TEMP = $Fake.Temp; TMP = $Fake.Temp }
     foreach ($name in $Environment.Keys) { $variables[$name] = $Environment[$name] }
-    if (-not ((Test-InTestRoot $variables.LOCALAPPDATA) -and (Test-InTestRoot $Fake.Temp) -and (Test-InTestRoot $Fake.Shortcut) -and $Fake.Key.StartsWith("$testKey\")) -and $Flags -notcontains '-WhatIf') { throw 'Test bug: a run that may delete must stay inside the test folder.' }
+    if (-not ((Test-InTestRoot $variables.LOCALAPPDATA) -and (Test-InTestRoot $variables.USERPROFILE) -and (Test-InTestRoot $Fake.Temp) -and (Test-InTestRoot $Fake.Shortcut) -and $Fake.Key.StartsWith("$testKey\")) -and $Flags -notcontains '-WhatIf') { throw 'Test bug: a run that may delete must stay inside the test folder.' }
     $start = New-Object Diagnostics.ProcessStartInfo $shell
     $start.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Script`" -StartMenuShortcut `"$($Fake.Shortcut)`" -AutostartRegistryKey `"$($Fake.Key)`" $($Flags -join ' ')"
     $start.UseShellExecute = $false; $start.CreateNoWindow = $true; $start.RedirectStandardInput = $true; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
     foreach ($name in $variables.Keys) { if ($null -eq $variables[$name]) { $start.EnvironmentVariables.Remove($name) } else { $start.EnvironmentVariables[$name] = $variables[$name] } }
-    foreach ($name in 'PSModulePath', 'PRIVATE_FLOW_DATA_DIR') { $start.EnvironmentVariables.Remove($name) }
+    foreach ($name in 'PSModulePath', 'PRIVATE_FLOW_DATA_DIR', 'PRIVATE_FLOW_DICTATION_CLIPS') { $start.EnvironmentVariables.Remove($name) }
     # On a UTF-8 console Windows PowerShell's input writer would start with a byte order mark, read as part of the answer.
     $inputEncoding = [Console]::InputEncoding
     if ($inputEncoding.CodePage -eq 65001) { [Console]::InputEncoding = New-Object Text.UTF8Encoding $false }
@@ -123,7 +128,10 @@ try {
     $fake2 = New-Fixture 'data-link'; Rename-Item -LiteralPath $fake2.Data -NewName 'Real'; New-Item -ItemType Junction -Path $fake2.Data -Target "$($fake2.Local)\Real" | Out-Null
     $fake3 = New-Fixture 'link-in-path'; New-Item -ItemType Junction -Path "$testRoot\Alias" -Target $fake3.Base | Out-Null
     $fake4 = New-Fixture 'no-program'; Remove-Item -LiteralPath "$($fake4.Install)\PrivateFlow.exe"
-    foreach ($case in @(@($fake, @{}, 'the program folder is a junction', 'is a junction or symbolic link'), @($fake2, @{}, 'the data folder is a junction', 'is a junction or symbolic link'),
+    $fake5 = New-Fixture 'clips-link'; Rename-Item -LiteralPath $fake5.Clips -NewName 'Real'; New-Item -ItemType Junction -Path $fake5.Clips -Target "$($fake5.Evaluation)\Real" | Out-Null
+    $fake6 = New-Fixture 'evaluation-link'; Rename-Item -LiteralPath $fake6.Evaluation -NewName 'RealEvaluation'; New-Item -ItemType Junction -Path $fake6.Evaluation -Target "$($fake6.Base)\RealEvaluation" | Out-Null
+    foreach ($case in @(@($fake5, @{}, 'the test clips folder is a junction', 'dictation-clips is a junction or symbolic link'), @($fake6, @{}, 'a link above the test clips below the profile', 'PrivateFlowEvaluation is a junction or symbolic link'),
+            @($fake, @{}, 'the program folder is a junction', 'is a junction or symbolic link'), @($fake2, @{}, 'the data folder is a junction', 'is a junction or symbolic link'),
             @($fake3, @{ LOCALAPPDATA = "$testRoot\Alias\Local" }, 'a link on the path below the profile', 'Alias is a junction or symbolic link'), @($fake4, @{}, 'a program folder without PrivateFlow.exe', 'holds no PrivateFlow\.exe'))) {
         $before = Get-Snapshot $case[0]
         $run = Invoke-Uninstaller $case[0] @('-Force') -Environment $case[1]
@@ -134,7 +142,7 @@ try {
     $fake = New-Fixture 'listing'
     $before = Get-Snapshot $fake
     $run = Invoke-Uninstaller $fake @('-WhatIf')
-    $listed = $fake.Install, "$($fake.Install).old-0123abcd", $fake.Data, "PrivateFlow-install-$('c' * 32)", "PrivateFlow-update-$('d' * 32)", 'Saved meetings: 2', 'Model: ggml-base.bin', 'also files you put there yourself', 'Start menu shortcut', 'Autostart value PrivateFlow'
+    $listed = $fake.Install, "$($fake.Install).old-0123abcd", $fake.Data, "PrivateFlow-install-$('c' * 32)", "PrivateFlow-update-$('d' * 32)", 'Saved meetings: 2', 'Model: ggml-base.bin', 'also files you put there yourself', 'Start menu shortcut', 'Autostart value PrivateFlow', $fake.Clips, 'Kept test clips: 2'
     Check ($run.ExitCode -eq 0 -and @($listed | Where-Object { $run.Output -notmatch [regex]::Escape($_) }).Count -eq 0 -and $run.Output -match 'What if: Performing the operation "Remove"' -and $run.Output -notmatch 'Set Alias') '-WhatIf lists every location, the meetings and models' $run.Output
     Check (Test-NothingRemoved $before $fake) '-WhatIf deletes nothing'
     foreach ($answer in '', 'y', 'yes', 'UNINSTAL') {
@@ -146,10 +154,10 @@ try {
     # link inside the data folder as a link only; what lies around the installation stays.
     $fake = New-Fixture 'confirmed'
     $run = Invoke-Uninstaller $fake -Answer 'UNINSTALL' -Script "$($fake.Install)\scripts\uninstall.ps1"
-    $left = @($fake.Install, "$($fake.Install).old-0123abcd", $fake.Data, $fake.Shortcut, "$($fake.Temp)\PrivateFlow-install-$('c' * 32)", "$($fake.Temp)\PrivateFlow-update-$('d' * 32).ps1") | Where-Object { Test-Path -LiteralPath $_ }
+    $left = @($fake.Install, "$($fake.Install).old-0123abcd", $fake.Data, $fake.Clips, $fake.Shortcut, "$($fake.Temp)\PrivateFlow-install-$('c' * 32)", "$($fake.Temp)\PrivateFlow-update-$('d' * 32).ps1") | Where-Object { Test-Path -LiteralPath $_ }
     Check ($run.ExitCode -eq 0 -and $run.Output -match 'Private Flow is uninstalled' -and @($left).Count -eq 0 -and $null -eq (Get-ItemProperty -LiteralPath $fake.Key -Name PrivateFlow -ErrorAction SilentlyContinue)) 'a confirmed run removes everything listed' "$($run.Output)`nleft: $left"
-    $kept = @("$($fake.Outside)\target\keep.txt", "$($fake.Local)\Programs\SomeOtherApp\keep.txt", "$($fake.Temp)\unrelated.txt") | Where-Object { Test-Path -LiteralPath $_ }
-    Check (@($kept).Count -eq 3 -and $null -ne (Get-ItemProperty -LiteralPath $fake.Key -Name SomeOtherApp -ErrorAction SilentlyContinue) -and @(Get-ChildItem -LiteralPath $fake.Temp -Filter 'PrivateFlow-*').Count -eq 0) 'the junction target, another app, other TEMP files and another Run value stay; the TEMP copy is gone'
+    $kept = @("$($fake.Outside)\target\keep.txt", "$($fake.Local)\Programs\SomeOtherApp\keep.txt", "$($fake.Temp)\unrelated.txt", "$($fake.Evaluation)\recordings\keep.txt") | Where-Object { Test-Path -LiteralPath $_ }
+    Check (@($kept).Count -eq 4 -and $null -ne (Get-ItemProperty -LiteralPath $fake.Key -Name SomeOtherApp -ErrorAction SilentlyContinue) -and @(Get-ChildItem -LiteralPath $fake.Temp -Filter 'PrivateFlow-*').Count -eq 0) 'the junction target, another app, other TEMP files, other evaluation files and another Run value stay; the TEMP copy and the kept test clips are gone'
 
     # Changed while the confirmation waits: the data folder replaced by a junction, the shortcut or the Run value pointed elsewhere.
     foreach ($case in @(@('the data folder replaced by a junction', { Rename-Item -LiteralPath $fake.Data -NewName 'Aside'; New-Item -ItemType Junction -Path $fake.Data -Target $fake.Outside | Out-Null }, 'Stopped: .*junction or symbolic link'),
@@ -215,8 +223,8 @@ try {
     $fake = New-Fixture 'started-by-app'
     New-StandIn "$($fake.Install)\PrivateFlow.exe"
     Set-Content -LiteralPath "$($fake.Base)\launch.txt" -Value @($shell, "-NoProfile -ExecutionPolicy Bypass -File `"$uninstaller`" -StartMenuShortcut `"$($fake.Shortcut)`" -AutostartRegistryKey `"$($fake.Key)`" -Force", "$($fake.Base)\launch.log")
-    $saved = @{}; foreach ($name in 'LOCALAPPDATA', 'TEMP', 'TMP') { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
-    try { $env:LOCALAPPDATA = $fake.Local; $env:TEMP = $env:TMP = $fake.Temp; $launcher = Start-StandIn "$($fake.Install)\PrivateFlow.exe" @('--launch', "`"$($fake.Base)\launch.txt`"") }
+    $saved = @{}; foreach ($name in 'LOCALAPPDATA', 'USERPROFILE', 'TEMP', 'TMP') { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+    try { $env:LOCALAPPDATA = $fake.Local; $env:USERPROFILE = $fake.Base; $env:TEMP = $env:TMP = $fake.Temp; $launcher = Start-StandIn "$($fake.Install)\PrivateFlow.exe" @('--launch', "`"$($fake.Base)\launch.txt`"") }
     finally { foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) } }
     $log = $(if ($launcher.WaitForExit(180000) -and (Test-Path -LiteralPath "$($fake.Base)\launch.log")) { Get-Content -LiteralPath "$($fake.Base)\launch.log" -Raw } else { '' })
     Check ($launcher.ExitCode -eq 0 -and $log -match '^EXIT 1' -and $log -notmatch '(conhost|PrivateFlow)\.exe \(process' -and $log -match 'PrivateFlow\.exe: ' -and -not (Test-Path -LiteralPath $fake.Data)) 'the app and its console host survive, the report names its locked exe, exit code 1' $log

@@ -23,12 +23,14 @@ internal sealed class GpuMemoryException(string message, GpuMemory memory) : Inv
 
 internal sealed class SpeechWorker : IDisposable
 {
-    private const int MaximumSamples = 480000;
+    internal const int MaximumSamples = 480000;
     private readonly SemaphoreSlim gate = new(1);
     private NamedPipeServerStream? pipe;
     private Process? process;
     private string? engine, model;
-    private DateTime lastUse = DateTime.UtcNow;
+    // When the model was last used, for the five-minute idle unload; --verify-worker-faults moves it by hand.
+    internal TimeProvider Clock { get; set; } = TimeProvider.System;
+    private DateTimeOffset lastUse = DateTimeOffset.UtcNow;
     private Task exited = Task.CompletedTask;
     private static readonly AsyncLocal<bool> finalPass = new();
     // Set by a final pass for its loads: it can wait for GPU memory or finish with a smaller model, so a model that does not fit the
@@ -57,7 +59,7 @@ internal sealed class SpeechWorker : IDisposable
             await PipeProtocol.WriteBytesAsync(pipe!, bytes, timeout.Token);
             var result = await PipeProtocol.ReadJsonAsync<WorkerReply>(pipe!, timeout.Token);
             if (result.Error is not null) throw new InvalidOperationException(result.Error);
-            lastUse = DateTime.UtcNow;
+            lastUse = Clock.GetUtcNow();
             if (!settings.KeepModelWarm) Stop();
             return result;
         }
@@ -73,7 +75,7 @@ internal sealed class SpeechWorker : IDisposable
     public async Task LoadAsync(Settings settings, CancellationToken cancellation, Action<GpuMemory>? loadingWithLowMemory = null)
     {
         await gate.WaitAsync(cancellation);
-        try { await EnsureStartedAsync(settings, cancellation, loadingWithLowMemory); lastUse = DateTime.UtcNow; }
+        try { await EnsureStartedAsync(settings, cancellation, loadingWithLowMemory); lastUse = Clock.GetUtcNow(); }
         catch (OperationCanceledException ex) when (!cancellation.IsCancellationRequested)
         { Stop(); throw new TimeoutException("Local speech worker timed out. Check the runtime and model pair.", ex); }
         catch (IOException) { Stop(); throw new InvalidOperationException(ExitedMessage); }
@@ -114,7 +116,7 @@ internal sealed class SpeechWorker : IDisposable
                 await Task.WhenAny(ready, worker.WaitForExitAsync(abandon.Token), Task.Delay(ProgressInterval, abandon.Token));
                 cancellation.ThrowIfCancellationRequested();
                 if (ready.IsCompleted) break;
-                if (worker.HasExited) throw new InvalidOperationException($"Local speech worker ended while loading the model (exit code {worker.ExitCode}). Check the runtime and model pair.");
+                if (worker.HasExited) throw new InvalidOperationException(EndedWhileLoading(worker.ExitCode));
                 var now = Activity(worker);
                 if (now != activity) { activity = now; lastProgress = clock.Elapsed; }
                 else if (clock.Elapsed - lastProgress > StalledLimit)
@@ -122,9 +124,20 @@ internal sealed class SpeechWorker : IDisposable
                 if (clock.Elapsed > LoadingLimit)
                     throw new TimeoutException($"The speech model was still loading after {LoadingLimit.TotalMinutes:0} minutes. Check the runtime and model pair.");
             }
+            // A worker that ends while connected breaks the pipe, and the failed read can come before its exit is seen: its exit code is
+            // the reason then, once it has ended.
+            if (ready.IsFaulted && ready.Exception!.GetBaseException() is IOException && await ExitedWithinAsync(worker, TimeSpan.FromSeconds(2)))
+                throw new InvalidOperationException(EndedWhileLoading(worker.ExitCode));
             return await ready;
         }
         finally { abandon.Cancel(); }
+    }
+    private static string EndedWhileLoading(int exitCode) => $"Local speech worker ended while loading the model (exit code {exitCode}). Check the runtime and model pair.";
+    private static async Task<bool> ExitedWithinAsync(Process worker, TimeSpan limit)
+    {
+        using var wait = new CancellationTokenSource(limit);
+        try { await worker.WaitForExitAsync(wait.Token); return true; }
+        catch (OperationCanceledException) { return worker.HasExited; }
     }
     private static async Task<GpuMemory?> ReadyAsync(NamedPipeServerStream connection, Action<GpuMemory> loadingWithLowMemory, CancellationToken cancellation)
     {
@@ -157,7 +170,7 @@ internal sealed class SpeechWorker : IDisposable
     private static extern bool GetProcessIoCounters(nint process, out IoCounters counters);
     public void UnloadIfIdle()
     {
-        if (DateTime.UtcNow - lastUse < TimeSpan.FromMinutes(5) || !gate.Wait(0)) return;
+        if (Clock.GetUtcNow() - lastUse < TimeSpan.FromMinutes(5) || !gate.Wait(0)) return;
         try { Stop(); } finally { gate.Release(); }
     }
     public async Task UnloadAsync()
@@ -191,13 +204,30 @@ internal sealed class SpeechWorker : IDisposable
         finally { running.Dispose(); }
     }
     public void Dispose() => Stop();
+    // For a setup that replaces the runtime files the worker maps: the worker stops and has ended when this returns, and no request starts
+    // it again until the lease is disposed.
+    public async Task<IDisposable> ReserveAsync(CancellationToken token)
+    {
+        await gate.WaitAsync(token);
+        Stop();
+        await exited;
+        return new GateLease(gate);
+    }
+    private sealed class GateLease(SemaphoreSlim held) : IDisposable
+    {
+        private int released;
+        public void Dispose() { if (Interlocked.Exchange(ref released, 1) == 0) held.Release(); }
+    }
 
-    public static async Task RunChildAsync(string name, string engine, string model, string memoryMode)
+    // instead, given the connected pipe, may answer in place of the worker and return true; the verification host's worker that fails
+    // on cue is the only one that does, so the app passes nothing.
+    public static async Task RunChildAsync(string name, string engine, string model, string memoryMode, Func<NamedPipeClientStream, Task<bool>>? instead = null)
     {
         using var connection = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
         try
         {
             await connection.ConnectAsync(30000);
+            if (instead is not null && await instead(connection)) return;
             // The constructor loads the model; the message before it lets a dictation say why the load is slow while it lasts.
             using var speech = new NativeSpeech(engine, model, memoryMode == RefuseShort,
                 low => PipeProtocol.WriteJsonAsync(connection, new WorkerReply(null, null, Memory: low, Loading: true), CancellationToken.None).GetAwaiter().GetResult());

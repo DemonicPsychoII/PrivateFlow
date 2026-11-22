@@ -7,6 +7,7 @@ Every warning, error or note card has a key that names its condition (see `Notic
 | `dictate-audio-devices` | Dictate | condition | the next device refresh that succeeds |
 | `dictate-copy-failed` | Dictate | outcome | the next successful Copy text |
 | `dictate-export-failed` | Dictate | outcome | the next successful Export text |
+| `dictate-keep-clip-failed` | Dictate | outcome | the next dictation or Keep as test clip that saves |
 | `dictate-no-microphone` | Dictate | condition | a device refresh that finds a microphone |
 | `dictate-nothing-recovered` | Dictate | outcome | the next Recover that finds a result |
 | `dictation-escape` | Dictate | condition | the end of the recording it is about |
@@ -17,7 +18,7 @@ Every warning, error or note card has a key that names its condition (see `Notic
 | `dictation-not-pasted` | Dictate | outcome | the next dictation |
 | `dictation-outcome` | Dictate | outcome (no text, released too soon) | the next dictation |
 | `dictation-queued` | Dictate | condition | the wait for the meeting notes ends |
-| `dictation-refused` | Dictate | condition | the meeting, setup or check it waited for ends |
+| `dictation-refused` | Dictate | condition | the meeting, setup, check, model removal or update it waited for ends |
 | `dictation-silent` | Dictate | outcome | the next dictation |
 | `dictation-used-clean` | Dictate | outcome | the next dictation or file transcription |
 | `history-delete-failed` | History, meeting | outcome | the next successful delete of the meeting |

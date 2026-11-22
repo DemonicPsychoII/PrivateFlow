@@ -85,8 +85,12 @@ internal sealed partial class WorkspacePages : IDisposable
         profiles = new(settings.Profiles.Select(p => JsonSerializer.Deserialize<DictationProfile>(JsonSerializer.Serialize(p))!));
         Libraries = Track(BuildLibraries());
         Profiles = Track(BuildProfiles());
-        meetings = new(settings, microphones, playbackDevices, report, notify, openMeetings, openShortcutSettings, () => this.openSettings(MainWindow.ModelsTitle), board: board, modelsNotices: modelsNotices);
+        var notesModel = ModelList.Find(ModelCatalogue.NotesModel);
+        var notesInstall = new NotesModelInstall(Offer(notesModel, MeetingsPanel.NotesInstallLabel, false), Offer(notesModel, MeetingsPanel.NotesInstallLabel, false),
+            () => installingKey == ModelCatalogue.NotesModel, () => notesInstallFailure);
+        meetings = new(settings, microphones, playbackDevices, report, notesInstall, notify, openMeetings, openShortcutSettings, () => this.openSettings(MainWindow.ModelsTitle), board: board);
         meetings.Ended += () => OperationEnded?.Invoke();
+        meetings.RecordingChanged += RefreshModels;
         Meetings = Track(new WorkspacePage(meetings, null));
         History = Track(new WorkspacePage(meetings.History, meetings.HistorySearch));
         MeetingSettings = Track(meetings.MeetingSettings);
@@ -109,9 +113,11 @@ internal sealed partial class WorkspacePages : IDisposable
     public WorkspacePage SpeechEngine { get; }
     public bool MeetingActive => meetings.IsRecording;
     public bool MeetingCapturing => meetings.IsCapturing;
-    public bool OperationActive => meetings.IsRecording || busy;
+    // A model being removed is an operation as a setup is: dictation, the meeting shortcut, an update and Quit wait for it.
+    public bool OperationActive => meetings.IsRecording || busy || removing;
     public event Action<bool> MeetingCaptureChanged { add => meetings.CaptureChanged += value; remove => meetings.CaptureChanged -= value; }
-    public MeetingShortcutDecision PressMeetingShortcut(bool dictationActive) => meetings.PressShortcut(dictationActive, busy);
+    public MeetingShortcutDecision PressMeetingShortcut(bool dictationActive) => meetings.PressShortcut(dictationActive, busy || removing);
+    public Func<bool> Updating { set => meetings.Updating = value; }
     public void ShowMeetingShortcut(IReadOnlyList<string>? keys) => meetings.ShowShortcut(keys);
     // Dictation disables these pages; a running setup or check disables them as well.
     public bool Enabled { set { enabled = value; ApplyEnabled(); } }
@@ -119,9 +125,9 @@ internal sealed partial class WorkspacePages : IDisposable
     {
         busyCancellation?.Cancel();
         await meetings.StopOperationsAsync();
-        while (busy) await Task.Delay(50);
+        while (busy || removing || installingKey is not null) await Task.Delay(50);
     }
-    public void Dispose() => meetings.Dispose();
+    public void Dispose() { busyCancellation?.Cancel(); meetings.Dispose(); }
     // A card on Dictate, under Text style or under Profiles per app runs it with its progress under Speech recognition.
     // A profile shown under Profiles per app, saved or not, writes with Local polish.
     public bool ProfilesChooseLocalPolish => profiles.Any(profile => profile.OutputStyle == OutputStyle.LocalPolish);
@@ -137,6 +143,22 @@ internal sealed partial class WorkspacePages : IDisposable
     }
     private void ApplyEnabled() { foreach (var element in pageElements) element.IsEnabled = enabled && !busy; RefreshModels(); }
     private void SetBusy(bool value) { busy = value; ApplyEnabled(); if (!value) OperationEnded?.Invoke(); }
+    // Work that replaces files a speech worker may hold runs as Apply does: the worker stops, and dictation, meetings, other setups and an
+    // update wait for it. False, without running it, while another operation or a meeting runs; the caller checks dictation.
+    // Quit cancels it as it cancels a setup started here.
+    public async Task<bool> RunAsSetupAsync(Func<CancellationToken, Task> work)
+    {
+        if (OperationRunning() is not null || meetings.IsRecording) return false;
+        SetBusy(true);
+        using var cancellation = new CancellationTokenSource(); busyCancellation = cancellation;
+        try
+        {
+            using (await WhisperEngine.ReserveAsync(cancellation.Token)) await work(cancellation.Token);
+            return true;
+        }
+        catch (OperationCanceledException) { return false; }
+        finally { busyCancellation = null; SetBusy(false); }
+    }
     // A meeting, a setup or a check that kept dictation from starting has ended.
     public event Action? OperationEnded;
     // Speech recognition was set up with Apply.
@@ -321,7 +343,8 @@ internal sealed partial class WorkspacePages : IDisposable
         return grid;
     }
     // A choice shown by its name on the page and stored by its value, such as "German" for "de".
-    private sealed record Named<T>(T Value, string Label);
+    // UI Automation names a combo box choice by its ToString, so a screen reader says "Spanish", not the record's fields.
+    private sealed record Named<T>(T Value, string Label) { public override string ToString() => Label; }
     private static DataGridComboBoxColumn LanguageColumn(double width) => new()
     {
         Header = "Language", Width = width, SelectedValuePath = "Value", DisplayMemberPath = "Label", SelectedValueBinding = new Binding("Language"),
@@ -473,12 +496,14 @@ internal sealed partial class WorkspacePages : IDisposable
         backend.SelectionChanged += (_, _) => ShowInUse(); model.SelectionChanged += (_, _) => ShowInUse();
         var vad = Toggle("Use local speech detection (Silero)", settings.SpeechDetection);
         var warm = Toggle("Keep speech model warm", settings.KeepModelWarm);
+        var keepClips = Toggle("Keep dictations as test clips", settings.KeepDictationClips);
         // Each of the engine and model paths is read as typed by hand on its own; one after the other they give what UsePathsEnteredByHand
         // gives for both, so a setup that changed one of them refreshes only that field.
         PreferenceControl[] speechControls =
         [
             new([nameof(Settings.SpeechDetection)], source => vad.IsChecked = source.SpeechDetection, target => target.SpeechDetection = vad.IsChecked == true),
             new([nameof(Settings.KeepModelWarm)], source => warm.IsChecked = source.KeepModelWarm, target => target.KeepModelWarm = warm.IsChecked == true),
+            new([nameof(Settings.KeepDictationClips)], source => keepClips.IsChecked = source.KeepDictationClips, target => target.KeepDictationClips = keepClips.IsChecked == true),
             new([nameof(Settings.EnginePath)], source => enginePath.Text = source.EnginePath, target => target.UsePathsEnteredByHand(enginePath.Text.Trim(), target.ModelPath)),
             new([nameof(Settings.ModelPath)], source => modelPath.Text = source.ModelPath, target => target.UsePathsEnteredByHand(target.EnginePath, modelPath.Text.Trim())),
             new([nameof(Settings.LocalRewriteEnginePath)], source => rewriteEngine.Text = source.LocalRewriteEnginePath, target => target.LocalRewriteEnginePath = rewriteEngine.Text.Trim()),
@@ -494,7 +519,7 @@ internal sealed partial class WorkspacePages : IDisposable
             FollowSpeechSetUp(); ShowInUse();
         }
         foreach (var field in new[] { enginePath, modelPath, rewriteEngine, rewriteModel, vadModel }) field.TextChanged += (_, _) => Changed();
-        foreach (var toggle in new[] { vad, warm }) { toggle.Checked += (_, _) => Changed(); toggle.Unchecked += (_, _) => Changed(); }
+        foreach (var toggle in new[] { vad, warm, keepClips }) { toggle.Checked += (_, _) => Changed(); toggle.Unchecked += (_, _) => Changed(); }
         var diagnostics = Button("Export", () =>
         {
             var picker = new Microsoft.Win32.SaveFileDialog { Filter = "Metadata diagnostics|*.json", FileName = "private-flow-diagnostics.json" };
@@ -528,7 +553,8 @@ internal sealed partial class WorkspacePages : IDisposable
             Section("Speech detection and start-up"),
             Card(
                 Row("Speech detection", "Uses the local Silero detector to skip silence before recognition.", vad),
-                Row("Keep speech model warm", "Starts dictation faster. Unloads after five idle minutes.", warm)),
+                Row("Keep speech model warm", "Starts dictation faster. Unloads after five idle minutes.", warm),
+                Row("Keep dictations as test clips", "Off unless you turn it on. The last dictation's audio then stays in memory until the next one, and Keep as test clip on Dictate saves it with the text as you corrected it, on this PC only, for the automated tests.", keepClips)),
             Section("Model paths"),
             SectionDescription("Apply fills these in. Change them only to use another local engine or model; updates then leave them alone."),
             Card(
@@ -539,16 +565,21 @@ internal sealed partial class WorkspacePages : IDisposable
                 Row("Silero model", "Speech detection", vadModel)));
         return new(content, null);
     }
-    // A setup script run from a row: its steps on the bar of the meeting progress in every view given, with the time it has taken. modelKey
-    // names the model of the list under Models that it installs, null for Apply; its row then offers Cancel.
-    // step hears the step and share as the views show them. Returns null once installed, otherwise why not.
+    // Every setup a button starts runs here: a setup script run from a row, its steps on the bar of the meeting progress in every view
+    // given, with the time it has taken. modelKey names the model of the list under Models that it installs, null for Apply; its rows then
+    // offer Cancel. step hears the step and share as the views show them. Returns null once installed, otherwise why not.
     private async Task<string?> SetupAsync(string script, string title, string? modelKey, (NoticeStack Stack, string Key, string Title) failure, IReadOnlyList<SetupProgressView> views,
         Action<string, double>? step, bool partOfRun, params string[] arguments)
     {
         // The gate of the Models page: one install, removal, Apply or check at a time; Install recommended runs its own steps through it.
-        if (meetings.IsRecording || (partOfRun ? busy || meetings.IsInstallingNotesModel || removing : OperationRunning() is not null)) return "Another setup or a meeting is running.";
+        if (meetings.IsRecording || (partOfRun ? busy || removing || installingKey is not null : OperationRunning() is not null)) return "Another setup or a meeting is running.";
         var apply = modelKey is null;
-        SetBusy(true); installingKey = modelKey; RefreshModels(); Report(title + "…");
+        // The meeting notes model is offered on the Notes tab with "You can keep using Private Flow": it installs without locking the pages
+        // or dictation, and how it ended stands on the Notes tab and under Models until it is installed.
+        var background = modelKey == ModelCatalogue.NotesModel;
+        string Ended(string reason) { notesInstallFailure = reason; Report("Installing the meeting notes model ended; Models and the Notes tab say how."); return reason; }
+        if (background) notesInstallFailure = null; else SetBusy(true);
+        installingKey = modelKey; RefreshModels(); Report(background ? title + ". You can keep using Private Flow." : title + "…");
         failure.Stack.Clear(failure.Key);
         using var cancellation = new CancellationTokenSource(); busyCancellation = cancellation;
         var progress = new SetupProgress(); var started = DateTime.UtcNow;
@@ -565,16 +596,41 @@ internal sealed partial class WorkspacePages : IDisposable
         Show(); clock.Start();
         try
         {
-            // A running worker holds the runtime DLLs that setup may replace; the next dictation restarts it.
-            if (apply) WhisperEngine.Shutdown();
-            var lines = new ProgressCallback<string>(line => owner.Dispatcher.BeginInvoke(() => { if (active) { progress.Report(line); Show(); } }));
-            var (error, changed) = await SpeechSetup.InstallAsync(settings, script, arguments, cancellation.Token, lines, RunSetup);
+            string? error; IReadOnlyList<string> changed;
+            // A running worker holds the runtime DLLs that setup may replace: it has ended before the setup starts, and the next dictation
+            // after the setup starts it again.
+            using (var worker = apply ? await WhisperEngine.ReserveAsync(cancellation.Token) : null)
+            {
+                // A warm llama-server holds the runtime files the rewrite setup extracts over: the local models stay stopped until the script
+                // says the runtime is in place, and while one still writes, the setup is refused.
+                var localModels = script == "setup-rewrite.ps1" ? await LocalRewriter.ReserveForSetupAsync() : null;
+                using (localModels)
+                {
+                    var lines = new ProgressCallback<string>(line =>
+                    {
+                        if (line == LocalRewriter.RuntimeInPlace) localModels?.Dispose();
+                        owner.Dispatcher.BeginInvoke(() => { if (active) { progress.Report(line); Show(); } });
+                    });
+                    (error, changed) = script == "setup-rewrite.ps1" && localModels is null ? ("The local model is in use. Set it up once it has finished.", [])
+                        : await SpeechSetup.InstallAsync(settings, script, arguments, cancellation.Token, lines, RunSetup);
+                }
+            }
             if (error is not null)
-            { Report("Ready"); failure.Stack.Report(new(failure.Key, NoticeKind.Error, failure.Title, NoticeText.Short(error), NoticeText.Detail(error))); return error; }
+            {
+                if (background) return Ended(error);
+                Report("Ready"); failure.Stack.Report(new(failure.Key, NoticeKind.Error, failure.Title, NoticeText.Short(error), NoticeText.Detail(error))); return error;
+            }
             if (apply) SpeechSetUp?.Invoke();
             refreshSpeechEngine(changed); setupInstalled();
+            // Installed, but a fresh Windows cannot load it without the Visual C++ runtime: said on the setup's failure card with the download.
+            if (script == "setup-engine.ps1" && !SpeechSetup.VisualCppRuntimeInstalled)
+            {
+                Report("Ready"); failure.Stack.Report(new(failure.Key, NoticeKind.Error, failure.Title, NoticeText.Short(SpeechRuntime.VisualCppRuntimeMissing), NoticeText.Detail(SpeechRuntime.VisualCppRuntimeMissing)));
+                return SpeechRuntime.VisualCppRuntimeMissing;
+            }
             Report(apply ? "Speech recognition is set up; the model paths below are refreshed."
                 : modelKey == ModelCatalogue.PolishModel ? "Local polish is set up. Choose it under Text style to use it."
+                : background ? "The meeting notes model is installed. Write notes with it on the Notes tab of a meeting."
                 : $"{ModelCatalogue.Model(modelKey!).Name} is installed." + (ModelList.Find(modelKey!).Use == ModelUse.Speech ? " Choose it under Speech recognition and press Apply to use it." : ""));
             return null;
         }
@@ -582,7 +638,8 @@ internal sealed partial class WorkspacePages : IDisposable
         {
             if (modelKey is not null)
             {
-                ModelFiles.RemovePartialDownloads(Settings.Root, ModelCatalogue.Model(modelKey), modelKey == ModelCatalogue.PolishModel ? ModelCatalogue.LlamaRuntimes(false, SpeechSetup.HasNvidiaGpu) : []);
+                ModelList.RemovePartialDownloads(Settings.Root, ModelList.Find(modelKey), SpeechSetup.HasNvidiaGpu);
+                if (background) return Ended("Installing was cancelled. The partial download was removed, so the next try downloads it again; files already verified stay.");
                 Report("Installing was cancelled. The partial download was removed; files already verified stay.");
             }
             else
@@ -596,19 +653,22 @@ internal sealed partial class WorkspacePages : IDisposable
         }
         catch (Exception ex)
         {
+            if (background) return Ended($"Setup could not run ({ex.GetType().Name}).");
             var reason = $"Setup failed: {ex.GetType().Name}. Check the data folder access.";
             Report("Ready"); failure.Stack.Report(new(failure.Key, NoticeKind.Error, failure.Title, reason)); return reason;
         }
         finally
         {
-            active = false; clock.Stop(); foreach (var view in views) view.Hide(); busyCancellation = null; installingKey = null; SetBusy(false); ModelsChanged?.Invoke();
+            active = false; clock.Stop(); foreach (var view in views) view.Hide(); busyCancellation = null; installingKey = null;
+            if (background) RefreshModels(); else SetBusy(false);
+            ModelsChanged?.Invoke();
             // Apply may have put another engine build in place, which only the script can tell.
             if (apply && recommendedRun is null && recommendation is not null) _ = RefreshRecommendationAsync();
         }
     }
     private async Task CheckAsync(TextBox report)
     {
-        if (busy || meetings.IsRecording) return; SetBusy(true);
+        if (OperationRunning() is not null || meetings.IsRecording) return; SetBusy(true);
         using var cancellation = new CancellationTokenSource(); busyCancellation = cancellation;
         speechNotices.Clear(CheckFailedKey);
         try { Report("Checking with generated speech; microphone stays unused…"); report.Text = await HealthChecks.SyntheticAsync(settings.Snapshot(), cancellation.Token); Report("Synthetic check complete."); }

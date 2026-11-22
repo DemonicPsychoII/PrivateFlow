@@ -43,7 +43,6 @@ internal sealed partial class WorkspacePages
         installTranscription.ToolTip = "Sets up speech recognition with Automatic, as Apply does: it installs the engine and models below and switches dictation to them.";
         diskText.Foreground = Theme<System.Windows.Media.Brush>("WarningText");
         factsText.ToolTip = "Read from this PC only; nothing is sent anywhere.";
-        meetings.InstallChanged += ShowLocalStep;
         UpdateRecommended();
         return Stack(
             Section("Recommended for this PC"),
@@ -76,7 +75,7 @@ internal sealed partial class WorkspacePages
                 $"\nProcessor: {pc.Processor}, {pc.LogicalProcessors} logical processors · Memory: {SpeechRuntime.Gigabytes(pc.Memory)} GB · Free on {pc.Drive} {ModelList.Size(pc.DiskFree)}";
         else factsText.Text = "Reading this PC…";
         var running = recommendedRun is not null;
-        var free = enabled && !busy && !meetings.IsInstallingNotesModel && !meetings.IsRecording;
+        var free = enabled && !busy && installingKey is null && !meetings.IsRecording;
         if (recommendation is not { } recommended)
         {
             localText.Text = recommending || facts is null ? "Working out the recommendation…" : "The setup script gave no recommendation; see Speech recognition.";
@@ -113,18 +112,13 @@ internal sealed partial class WorkspacePages
         var (done, bytes, total, name) = recommendedBand;
         recommendedProgress.Show($"Installing the recommended models, {name} · {step}", total == 0 ? share : (done + share * bytes) / total);
     }
-    private void ShowLocalStep()
-    {
-        if (recommendedRun is not null && meetings.IsInstallingNotesModel && meetings.ModelsListInstall.Progress is { Shown: true } progress)
-            ShowRecommendedStep(progress.Text.Replace("Installing the meeting notes model · ", ""), progress.Share);
-    }
     // Pressed again while its run goes on, the button cancels the step that runs and the rest of the run.
     private async Task InstallRecommendedAsync(string group)
     {
         if (recommendedRun is { } running)
         {
             if (recommendedGroup != group) return;
-            running.Cancel(); busyCancellation?.Cancel(); meetings.CancelInstall();
+            running.Cancel(); busyCancellation?.Cancel();
             return;
         }
         if (recommendation is not { } recommended || OperationRunning() is not null || meetings.IsRecording) return;
@@ -139,8 +133,11 @@ internal sealed partial class WorkspacePages
             steps.Add(("transcription", recommended.TranscriptionBytes, () => SetupAsync("setup-engine.ps1", "Setting up speech recognition", null,
                 (modelsNotices, RecommendedFailedKey, "The recommended transcription models were not installed"), [], ShowRecommendedStep, true,
                 "-Backend", "auto", "-Model", "auto", "-SetupVersion", SpeechSetup.BuildIdentity)));
+        // The step's name already says which model installs, so its bar shows the step without the install's title.
         if (group != "transcription" && !recommended.LocalComplete)
-            steps.Add(("local processing", recommended.LocalBytes, meetings.InstallForRunAsync));
+            steps.Add(("local processing", recommended.LocalBytes, async () =>
+                await InstallNotesModelAsync((text, share) => ShowRecommendedStep(text.Replace(NotesInstallTitle + " · ", ""), share), true)
+                ?? (MeetingNotesModel.IsInstalled(settings) ? null : "The meeting notes model was not installed.")));
         using var run = new CancellationTokenSource();
         recommendedRun = run; recommendedGroup = group;
         var total = steps.Sum(step => step.Bytes); long done = 0;

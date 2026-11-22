@@ -60,8 +60,6 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
     private readonly TextBlock indicator = new() { Text = IdleText, Style = WorkspacePages.Theme("RowDescription"), Margin = new(16, 0, 16, 8) };
     // The Meetings page's warnings and errors, above the composer; the History page and Meeting defaults have their own.
     private readonly NoticeStack meetingNotices = new("Meetings notices") { Margin = new(0, 24, 0, 0) }, settingsNotices = new("Meeting defaults notices");
-    // The cards of Settings → Models, where the meeting notes model is installed and the notes style chosen.
-    private readonly NoticeStack modelsNotices;
     private const string SilentMicrophoneKey = "meeting-silent-microphone", PlaybackFallbackKey = "meeting-playback-fallback", PreviewStoppedKey = "meeting-preview-stopped",
         CouldNotStartKey = "meeting-could-not-start", EndedKey = "meeting-ended", ModelFallbackKey = "meeting-model-fallback", CaptureStoppedKey = "meeting-capture-stopped";
     // Points to warnings and errors of pages the user does not see; the window shows which page is on screen.
@@ -101,7 +99,6 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
     internal bool IsStarting => starting.IsStarting;
     internal NoticeStack MeetingNotices => meetingNotices;
     internal NoticeStack SettingsNotices => settingsNotices;
-    internal NoticeStack ModelsNotices => modelsNotices;
     internal bool ShowsSilenceWarning => meetingNotices.Notices.Find(SilentMicrophoneKey) is not null;
     internal string? PlaybackWarning => meetingNotices.Notices.Find(PlaybackFallbackKey)?.Text;
     internal bool ShowsUnfinished => unfinishedSection.Visibility == Visibility.Visible;
@@ -114,25 +111,18 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
     public FrameworkElement NotesStyleChoice { get; }
     // The system audio colour swatches, shown with the audio settings.
     public FrameworkElement SystemAudioColorChoice { get; }
-    // completeNotes stands in for the notes model and installNotesModel for its setup in the verification, so it never reaches a real
-    // model or downloads one. openNotesSettings opens where the notes style is chosen; modelsNotices are the cards there.
-    public MeetingsPanel(Settings settings, System.Windows.Controls.ComboBox microphones, System.Windows.Controls.ComboBox playbackDevices, Action<string> report,
+    // notesInstall is the install of the meeting notes model, which Settings → Models runs. openNotesSettings opens where the notes style
+    // is chosen.
+    public MeetingsPanel(Settings settings, System.Windows.Controls.ComboBox microphones, System.Windows.Controls.ComboBox playbackDevices, Action<string> report, NotesModelInstall notesInstall,
         Action<string, bool>? notify = null, Action? open = null, Action? openShortcutSettings = null, Action? openNotesSettings = null,
-        Func<string, string, CancellationToken, Task<string>>? completeNotes = null, Func<IProgress<string>, CancellationToken, Task<string?>>? installNotesModel = null,
-        NoticeBoard? board = null, NoticeStack? modelsNotices = null)
+        NoticeBoard? board = null)
     {
         Board = board ?? new();
-        this.modelsNotices = modelsNotices ?? new("Models notices");
         Board.Add(meetingNotices.Notices, MeetingsPage); Board.Add(settingsNotices.Notices, MainWindow.MeetingDefaultsTitle); Board.Add(historyNotices.Notices, HistoryPage);
-        if (modelsNotices is null) Board.Add(this.modelsNotices.Notices, MainWindow.ModelsTitle);
         this.settings = settings; this.microphones = microphones; this.playbackDevices = playbackDevices; this.report = report; this.notify = notify ?? ((_, _) => { });
         this.open = open ?? (() => { if (Window.GetWindow(this) is { } host) { host.Show(); host.WindowState = WindowState.Normal; host.Activate(); } });
         this.openShortcutSettings = openShortcutSettings ?? (() => { });
-        CompleteNotes = completeNotes;
-        InstallNotesModel = installNotesModel ?? ((progress, token) => MeetingNotesModel.InstallAsync(settings, token, progress));
-        installOnNotes = NewInstallRow(InstallLabel);
-        installInSettings = NewInstallRow($"Install ({SpeechRuntime.Gigabytes(MeetingNotesModel.DownloadBytes)} GB)", ModelCatalogue.Model(ModelCatalogue.NotesModel).Name); installForChoice = NewInstallRow(InstallLabel);
-        settingsRows.AddRange([installInSettings, installForChoice]);
+        this.notesInstall = notesInstall;
         archive = new(Path.Combine(Settings.Root, "meetings")); devices = new(Dispatcher);
         keepAudio = settings.RetainMeetingAudio; defaultKeep.IsChecked = settings.RetainMeetingAudio;
         selectedLanguages = SavedLanguages;
@@ -242,17 +232,14 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
             notesStyles[style] = option; notesOptions.Children.Add(option);
         }
         // Shown under the options while the Local model style is chosen without its model: the same install as everywhere else.
-        installForChoice.Progress.Margin = new(0, 6, 0, 0);
-        var missingModel = WorkspacePages.Row(WorkspacePages.Stack(WorkspacePages.Description("The meeting notes model is not installed. " + InstallOffer), installForChoice.Progress), installForChoice.Button);
-        void FollowChoice() => Show(missingModel, notesStyles[MeetingNotesStyle.LocalModel].IsChecked == true && (!MeetingNotesModel.IsInstalled(settings) || installCancellation is not null));
+        notesInstall.NextToStyle.Progress.Margin = new(0, 6, 0, 0);
+        notesModelMissing = WorkspacePages.Row(WorkspacePages.Stack(WorkspacePages.Description("The meeting notes model is not installed. " + NotesInstallOffer), notesInstall.NextToStyle.Progress),
+            notesInstall.NextToStyle.Button);
         foreach (var option in notesStyles.Values) { option.Checked += (_, _) => FollowChoice(); }
-        InstallChanged += FollowChoice;
-        notesOptions.Children.Add(missingModel);
+        notesOptions.Children.Add(notesModelMissing);
         notesStyleSection = new Border { Style = WorkspacePages.Theme("Card"), Padding = new(4), Child = notesOptions };
         NotesStyleChoice = notesStyleSection;
-        UpdateInstall(); FollowChoice();
-        // A model file removed or a path saved changes what the install rows offer.
-        settings.Saved += UpdateInstall;
+        FollowChoice();
         this.openNotesSettings = () => { (openNotesSettings ?? (() => { }))(); Dispatcher.BeginInvoke(() => notesStyleSection.BringIntoView(), DispatcherPriority.Loaded); };
         MeetingSettings = new(WorkspacePages.Page(
             settingsNotices,
@@ -392,8 +379,11 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
     private void Start()
     {
         if (App.DiagnosticMode) { report("Diagnostic instance: microphone and system-audio capture disabled."); return; }
+        if (Updating()) { meetingNotices.Report(new(CouldNotStartKey, NoticeKind.Warning, "The meeting did not start", UpdateGate.StartRefusal)); return; }
         _ = BeginAsync(StartCapture);
     }
+    // An update runs until Private Flow restarts: Start meeting and the meeting shortcut refuse meanwhile.
+    public Func<bool> Updating { get; set; } = () => false;
     private void StartCapture(MeetingCapture active) =>
         active.Start(recordMicrophone ? (microphones.SelectedItem as MicrophoneDevice)?.Id ?? settings.MicrophoneId : null, PlaybackChoice, devices);
     // The output device a meeting started now records: empty for the Windows default, null when system audio is left out.
@@ -404,7 +394,7 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
     // The verification passes synthetic sources instead of the devices.
     internal MeetingShortcutDecision PressShortcut(bool diagnostic, bool dictationActive, bool otherOperation, Action<MeetingCapture> startCapture)
     {
-        var decision = MeetingShortcut.Decide(diagnostic, IsCapturing, processing, dictationActive, otherOperation);
+        var decision = MeetingShortcut.Decide(diagnostic, IsCapturing, processing, dictationActive, otherOperation, Updating());
         if (decision.Action == MeetingShortcutAction.Start) _ = BeginAsync(startCapture);
         else if (decision.Action == MeetingShortcutAction.Stop) _ = StopAsync();
         return decision;
@@ -665,11 +655,10 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
     {
         // A start in progress ends before any of its devices opens.
         if (starting.IsStarting && StartingCapture.Meeting(StartingEvent.Quit) == StartingOutcome.Cancel) CancelStart();
-        notesCancellation?.Cancel(); installCancellation?.Cancel();
+        notesCancellation?.Cancel();
         cancelFinishing?.Invoke(MeetingArchive.QuitBeforeFinished); capture?.CancelProcessing(MeetingArchive.QuitBeforeFinished);
         await StopAsync(true);
         while (processing) await Task.Delay(50);
-        await installRun;
     }
     // True when the user confirmed and no recording or finishing started while the question was open.
     private async Task<bool> ConfirmAsync(string heading, string message, string action) => await ConfirmationDialog.AskAsync(this, heading, message, action) && !IsRecording;
@@ -678,8 +667,10 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
     {
         microphoneChip.IsEnabled = systemAudioChip.IsEnabled = languagesChip.IsEnabled = keepChip.IsEnabled = title.IsEnabled = finishUnfinished.IsEnabled = deleteUnfinishedAudio.IsEnabled = enabled;
         SetHistoryActions(enabled);
-        UpdateInstall();
+        RecordingChanged?.Invoke();
     }
+    // A meeting started or stopped recording or finishing; the installs under Models wait meanwhile.
+    public event Action? RecordingChanged;
     // Runs a final pass on the thread pool with the progress, Continue in background and Cancel finishing of a stopped meeting.
     // True when the pass completed; false when it was cancelled or failed. meetings are those the pass finishes, for their cards.
     private async Task<bool> RunFinishingAsync(Func<IProgress<MeetingProgress>, CancellationToken, Task<string>> work, params MeetingDocument[] meetings)
@@ -755,5 +746,5 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
         { meetingNotices.Report(new("meeting-audio-not-deleted", NoticeKind.Error, "The audio was not deleted", ex.Message)); }
         Refresh();
     }
-    public void Dispose() { timer.Stop(); notesTimer.Stop(); notesCancellation?.Cancel(); installCancellation?.Cancel(); HideLevels(); progressWindow?.Close(); capture?.Dispose(); devices.Dispose(); }
+    public void Dispose() { timer.Stop(); notesTimer.Stop(); notesCancellation?.Cancel(); HideLevels(); progressWindow?.Close(); capture?.Dispose(); devices.Dispose(); }
 }

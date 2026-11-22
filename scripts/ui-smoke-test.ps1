@@ -1,5 +1,8 @@
+# -App: the verification host, or the package's PrivateFlow.exe for the host built beside it; by default the checkout's.
 [CmdletBinding()]
-param([string]$App = (Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts\app\PrivateFlow.exe'))
+param([string]$App = '')
+. (Join-Path $PSScriptRoot 'eval-common.ps1')
+$App = Get-VerificationHost $App
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 $taskOldRoot = $env:PRIVATE_FLOW_DATA_DIR
@@ -80,9 +83,10 @@ try {
     New-Meeting 'Design review' 0 'Can we do the demo before lunch?','Lunch is at 12:30, so eleven would be safer.','The train leaves at twelve thirty.'
     New-Meeting 'Supplier call' 1 'Call me back at 1230 about the invoice.'
     New-Meeting 'Weekly sync' 2 'Nothing new this week.'
-    $taskProcess = Start-Process -FilePath $App -ArgumentList '--diagnostic-ui' -WindowStyle Hidden -PassThru
+    $taskProcess = Start-Process -FilePath $App -ArgumentList '--diagnostic-ui' -PassThru
     $taskWindow = $null
-    for ($taskTry=0; $taskTry -lt 40; $taskTry++) {
+    $taskStartup = [Diagnostics.Stopwatch]::StartNew()
+    while ($taskStartup.Elapsed.TotalSeconds -lt 30) {
         if ($taskProcess.HasExited) { throw "App exited unexpectedly ($($taskProcess.ExitCode))." }
         $taskCondition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty,$taskProcess.Id)
         $taskWindow = [Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children,$taskCondition)

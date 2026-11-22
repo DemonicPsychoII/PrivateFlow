@@ -66,6 +66,8 @@ public sealed class Settings
     public int PolishWaitSeconds { get; set; } = DefaultPolishWaitSeconds;
     public bool SpeechDetection { get; set; } = true;
     public bool KeepModelWarm { get; set; } = true;
+    // Opt-in: the last dictation's audio stays in memory so "Keep as test clip" can save it for the test suite (DictationClips).
+    public bool KeepDictationClips { get; set; }
     public bool SpokenFormatting { get; set; }
     public bool TechnicalMode { get; set; }
     public bool LiteralMode { get; set; }

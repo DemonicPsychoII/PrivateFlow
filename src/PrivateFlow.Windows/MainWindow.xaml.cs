@@ -129,6 +129,7 @@ public partial class MainWindow : Window, IDictationView
         SystemAudioColorHost.Content = pages.SystemAudioColorChoice;
         // A refused dictation or file transcription goes when the meeting, setup or check it waited for ends.
         pages.OperationEnded += () => { if (!pages.OperationActive) DictateNotices.Clear(DictationController.RefusedKey); };
+        pages.Updating = () => updating;
         pages.SpeechSetUp += () => DictateNotices.Clear(RecommendationFailedKey);
         VocabularyColumn.Children.Add(pages.Libraries.Content);
         pages.PreferenceChanged += UpdateUnsaved;
@@ -180,10 +181,20 @@ public partial class MainWindow : Window, IDictationView
         updates.Start();
         if (!App.DiagnosticMode && UpdateController.InstalledFolder() is not null) _ = FollowSpeechRecommendationAsync();
     }
-    private const string NothingRecoveredKey = "dictate-nothing-recovered", RecommendationFailedKey = "speech-recommendation-failed", CopyFailedKey = "dictate-copy-failed", ExportFailedKey = "dictate-export-failed";
+    private const string NothingRecoveredKey = "dictate-nothing-recovered", RecommendationFailedKey = "speech-recommendation-failed", CopyFailedKey = "dictate-copy-failed", ExportFailedKey = "dictate-export-failed", KeepClipFailedKey = "dictate-keep-clip-failed";
     private async Task FollowSpeechRecommendationAsync()
     {
-        var (notice, error, changed) = await SpeechSetup.FollowRecommendationAsync(settings);
+        if (!SpeechSetup.FollowsRecommendation(settings)) return;
+        // Downloads alone run in the background. A new speech runtime is extracted over the one a running speech worker holds, so it is set
+        // up as Apply does, as is a setup whose recommendation could not be read; with a dictation running, the next start tries again.
+        var recommended = await WorkspacePages.ScriptRecommendationAsync(["-Backend", settings.SpeechBackend, "-Model", settings.SpeechModel]);
+        // An update or Quit begun meanwhile leaves it to the next start.
+        if (updating || quitting) return;
+        (string? Notice, string? Error, IReadOnlyList<string> Changed) result = (null, null, []);
+        async Task Follow(CancellationToken token) => result = await SpeechSetup.FollowRecommendationAsync(settings, token);
+        if (recommended?.EngineInstalled == true) await Follow(CancellationToken.None);
+        else if (dictation.IsRecording || dictation.IsBusy || !await pages.RunAsSetupAsync(Follow)) return;
+        var (notice, error, changed) = result;
         UpdateUnsaved(); pages.RefreshSpeechEngine(changed);
         // A failure retries at every start, so it stays as a card instead of a balloon each time.
         if (error is not null)
@@ -701,8 +712,9 @@ public partial class MainWindow : Window, IDictationView
         else updates.AnnounceIfNew();
     }
     bool IDictationView.OtherOperationActive => pages.OperationActive;
+    bool IDictationView.Updating => updating;
     bool IDictationView.WindowShowing => IsVisible && WindowState != WindowState.Minimized;
-    bool IDictationView.MicrophoneSelected => Microphones.SelectedIndex >= 0;
+    bool IDictationView.MicrophoneSelected => App.LibraryAudio is not null || Microphones.SelectedIndex >= 0;
     Settings IDictationView.DictationPreferences()
     {
         var shown = DictationPreferences();
@@ -714,6 +726,7 @@ public partial class MainWindow : Window, IDictationView
     void IDictationView.ShowStatus(string message) => Status.Text = message;
     void IDictationView.ShowRecording()
     {
+        ShowKeepClip();
         CancelButton.IsEnabled = true;
         RecordButton.Content = "Stop";
         Microphones.IsEnabled = Languages.IsEnabled = false;
@@ -735,7 +748,19 @@ public partial class MainWindow : Window, IDictationView
         SetPreferencesEnabled(true);
         SetState(BrandState.Idle, "Private Flow — ready");
     }
-    void IDictationView.ShowResult(string original, string final) { Original.Text = original; Transcript.Text = final; Diff.Text = TextDifference.Describe(original, final); }
+    void IDictationView.ShowResult(string original, string final) { Original.Text = original; Transcript.Text = final; Diff.Text = TextDifference.Describe(original, final); ShowKeepClip(); }
+    // Turning the setting off releases a kept dictation at once.
+    private void ShowKeepClip()
+    {
+        if (!settings.KeepDictationClips) dictation.ForgetClip();
+        KeepClipButton.Visibility = dictation.LastClip is not null ? Visibility.Visible : Visibility.Collapsed;
+    }
+    private void KeepClipClick(object sender, RoutedEventArgs e)
+    {
+        if (dictation.LastClip is not { } clip || string.IsNullOrWhiteSpace(Transcript.Text)) return;
+        try { var id = DictationClips.Keep(clip.Samples, clip.Language, Transcript.Text); dictation.ForgetClip(); ShowKeepClip(); Status.Text = $"Kept as test clip {id}, on this PC only."; }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { DictateNotices.Report(new(KeepClipFailedKey, NoticeKind.Error, "Not kept as a test clip", ex.Message)); }
+    }
     void IDictationView.OpenPage(string title) => OpenPage(title);
     private void RecordClick(object sender, RoutedEventArgs e) => dictation.Toggle();
     private void CancelClick(object sender, RoutedEventArgs e) => _ = dictation.CancelAsync();
@@ -744,7 +769,7 @@ public partial class MainWindow : Window, IDictationView
         try { if (!string.IsNullOrEmpty(Transcript.Text)) { System.Windows.Clipboard.SetText(Transcript.Text); DictateNotices.Clear(CopyFailedKey); Status.Text = "Copied. Paste into the app you choose."; } }
         catch (COMException) { DictateNotices.Report(new(CopyFailedKey, NoticeKind.Error, "Not copied", "The clipboard is busy. Select the text and copy it yourself.")); }
     }
-    private void ClearClick(object sender, RoutedEventArgs e) { Transcript.Clear(); Original.Clear(); Diff.Clear(); dictation.ForgetResult(); }
+    private void ClearClick(object sender, RoutedEventArgs e) { Transcript.Clear(); Original.Clear(); Diff.Clear(); dictation.ForgetResult(); ShowKeepClip(); }
     private void SaveClick(object sender, RoutedEventArgs e) { if (SavePreferences()) Keyboard.ClearFocus(); }
     // Stores every shown preference. False when something stayed unsaved; the reason is then on a card, in the popup at its section.
     private bool SavePreferences()
@@ -769,6 +794,7 @@ public partial class MainWindow : Window, IDictationView
                 loadedVocabulary = settings.Vocabulary;
                 pages.PreferencesStored(changed);
                 if (changed.Contains(PreferenceSections.Profiles)) RefreshProfiles();
+                ShowKeepClip();
             }
             catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
             {
@@ -1004,23 +1030,42 @@ public partial class MainWindow : Window, IDictationView
     // The update restarts Private Flow, which would drop unsaved preferences as Quit does: once the update is confirmed, they are
     // saved or discarded, and until the restart a notice covers the window so nothing new can be changed. An update that fails leaves
     // Private Flow running, so the notice closes when the installer ends.
+    // The installer stops Private Flow once the download is done, so an update does not start while a dictation, a meeting or a setup runs,
+    // asked before the confirmation and again after it; from then on, until the restart, dictation and meetings refuse to start.
     private async void StartUpdate()
     {
-        if (updating || await updates.StartUpdateAsync(SettleUnsavedAsync) is not { } installer) return;
-        updating = true;
+        string? Busy() => UpdateGate.UpdateRefusal(dictation.IsRecording || dictation.IsBusy, pages.MeetingActive || pages.MeetingCapturing, pages.OperationActive);
+        void Refuse(string reason) => AboutNotices.Report(new("update-not-started", NoticeKind.Warning, "The update did not start", reason));
+        if (updating) return;
+        if (Busy() is { } busy) { Refuse(busy); return; }
+        var installer = await updates.StartUpdateAsync(async () =>
+        {
+            if (!await SettleUnsavedAsync()) return false;
+            if (Busy() is { } started) { Refuse(started); return false; }
+            updating = true;
+            return true;
+        });
+        if (installer is null) { updating = false; return; }
         if (settingsOverlay is not null) settingsOverlay.Close();
         var notice = ConfirmationDialog.ShowNotice(this, "Updating Private Flow", "The update downloads in its PowerShell window and Private Flow restarts when it is done. Until then nothing can be changed here.");
-        installer.EnableRaisingEvents = true;
+        // Subscribed before events are enabled: enabling them for an installer that has already ended raises Exited at once, and a handler
+        // added after that would never run, leaving Quit and the window locked.
         installer.Exited += (_, _) => Dispatcher.BeginInvoke(() =>
         {
+            installer.Dispose();
             updating = false; notice.Close();
+            if (!pages.OperationActive) DictateNotices.Clear(DictationController.RefusedKey);
             AboutNotices.Report(new(UpdateEndedKey, NoticeKind.Warning, "The update ended without a restart", "Private Flow keeps running as before; the PowerShell window of the update says why."));
         });
+        installer.EnableRaisingEvents = true;
     }
     private void QuitClick(object sender, RoutedEventArgs e) => Quit();
     private async void Quit()
     {
         if (quitting) return;
+        // The installer stops Private Flow once its download is done and starts it again. Quit now would let a copy started by hand in
+        // the meantime record until the installer stops that one too.
+        if (updating) { tray.ShowBalloon(5000, "Private Flow", UpdateGate.Installing, Forms.ToolTipIcon.Info); return; }
         // Quitting would drop unsaved preferences, so it asks first in the window; kept, Private Flow keeps running.
         pages.CommitEdits();
         if (HasUnsavedPreferences()) { OpenWindow(); if (!await SettleUnsavedAsync()) return; }

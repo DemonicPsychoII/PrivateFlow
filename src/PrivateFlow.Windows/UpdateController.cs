@@ -44,28 +44,44 @@ internal sealed class UpdateController(Window owner, TrayIcon tray, Action<Updat
         if (InstalledFolder() is not { } app)
         { problem(new("update-not-installed", PrivateFlow.Core.NoticeKind.Note, "This copy does not update itself", "Update works only for a copy installed with scripts\\install.ps1.")); return null; }
         var script = System.IO.Path.Combine(app, "scripts", "install.ps1");
-        var fromRelease = offer?.FromRelease ?? !ReleaseUpdate.UsesServer(UpdateServer.Read(Settings.Root), UpdateCheck.ReadCloudToken());
-        var news = offer is null ? "" : $"Update {Describe(offer)}" +
-            (offer.Changes.Count == 0 ? ".\n\n" : ":\n" + string.Join("\n", offer.Changes.Take(8).Select(change => "• " + change)) +
-             (offer.Changes.Count > 8 ? "\n• …" : "") + "\n\n");
-        // The restarted app brings Automatic speech choices to the new recommendation itself.
+        // A manual update checks first, so the dialog names the exact release or build and the installer is told it; a check that finds
+        // nothing, or fails, starts nothing. The offer stays as the dialog shows it, whatever a check finds while the dialog is open.
         if (asking) return null;
         asking = true;
+        UpdateOffer? offer;
         bool confirmed;
         try
         {
+            status("Checking for the update…");
+            offer = await UpdateCheck.FindAsync(CancellationToken.None);
+            if (offer is null)
+            {
+                problem(new("update-not-started", PrivateFlow.Core.NoticeKind.Warning, "The update did not start",
+                    "The check found no newer version, or could not reach the update source. Nothing was started; try again later."));
+                status("Ready");
+                return null;
+            }
+            this.offer = offer; offered(offer);
+            var news = $"Update {Describe(offer)}\n{(offer.FromRelease ? "Release" : "Build")} {offer.Commit}" +
+                (offer.Changes.Count == 0 ? "\n\n" : ":\n" + string.Join("\n", offer.Changes.Take(8).Select(change => "• " + change)) +
+                 (offer.Changes.Count > 8 ? "\n• …" : "") + "\n\n");
+            // The restarted app brings Automatic speech choices to the new recommendation itself.
             confirmed = await ConfirmationDialog.AskAsync(owner, "Update Private Flow",
-            news + (fromRelease ? "Install the latest public release from GitHub? " : "Install the newest integration build from your update server? Waking it can take up to two minutes. ") +
-            "Private Flow restarts once it is downloaded; a running recording is lost. If the recommended speech model changed, " +
+            news + (offer.FromRelease ? "Install this public release from GitHub? " : "Install this build from your update server? ") +
+            "Private Flow restarts once it is downloaded. If the recommended speech model changed, " +
             "it downloads in the background afterwards unless you chose a model under Settings → Speech recognition.", "Install update");
         }
         finally { asking = false; }
+        // Not null: a check without an offer returned above.
+        var fromRelease = offer!.FromRelease;
         if (!confirmed || !await beforeInstalling()) return null;
         // The installer renames the install folder, so it runs from a temp copy outside it. It stops
         // this app only after the download and engine setup succeed, so a failed update leaves it
         // running; its window stays open on failure so the error is readable.
         var copy = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"PrivateFlow-update-{Guid.NewGuid():N}.ps1");
         static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
+        // The release or build the user confirmed: the installer refuses whatever else it finds, such as a newer release or a stale offer.
+        var expected = offer.FromRelease ? $" -ExpectedRelease {Quote(offer.Commit)}" : $" -ExpectedCommit {Quote(offer.Commit)}";
         Process? installer;
         try
         {
@@ -73,7 +89,7 @@ internal sealed class UpdateController(Window owner, TrayIcon tray, Action<Updat
             installer = Process.Start(new ProcessStartInfo("powershell.exe")
             {
                 ArgumentList = { "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                    $"try {{ & {Quote(copy)} {(fromRelease ? "-FromRelease" : "-FromCloud")} -Destination {Quote(app)} }} " +
+                    $"try {{ & {Quote(copy)} {(fromRelease ? "-FromRelease" : "-FromCloud")}{expected} -Destination {Quote(app)} }} " +
                     $"catch {{ Write-Host $_ -ForegroundColor Red; Read-Host 'Update failed. Press Enter to close' }} " +
                     $"finally {{ Remove-Item -LiteralPath {Quote(copy)} -ErrorAction SilentlyContinue }}" },
                 WorkingDirectory = System.IO.Path.GetTempPath(),

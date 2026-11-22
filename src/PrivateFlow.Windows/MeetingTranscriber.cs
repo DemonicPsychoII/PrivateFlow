@@ -34,7 +34,10 @@ internal static class MeetingTranscriber
         CancellationToken token)
     {
         var languages = SpeechLanguages.Parse(document.Languages) is { Count: > 0 } chosen ? chosen : SpeechLanguages.Parse(SpeechLanguages.Offered);
-        var channels = document.Chunks.Where(chunk => File.Exists(archive.ChunkPath(document.Id, chunk.File))).GroupBy(chunk => chunk.Channel).ToArray();
+        // One look at the disk decides both what the pass decodes and the gap it reports once it has succeeded.
+        var present = document.Chunks.Where(chunk => File.Exists(archive.ChunkPath(document.Id, chunk.File))).ToHashSet();
+        var missingSeconds = MeetingArchive.MissingAudioSeconds(document, present);
+        var channels = document.Chunks.Where(present.Contains).GroupBy(chunk => chunk.Channel).ToArray();
         var total = channels.Sum(channel => channel.Max(chunk => chunk.Offset + chunk.Duration)); var done = 0.0;
         var segments = new Dictionary<string, List<TranscriptSegment>>(); var runs = new List<FinalPassRun>();
         var audio = channels.ToDictionary(channel => channel.Key, channel => new ChannelAudio(channel.Select(chunk => (archive.ChunkPath(document.Id, chunk.File), chunk.Offset, chunk.Duration))));
@@ -66,6 +69,7 @@ internal static class MeetingTranscriber
             segments["mic"] = microphone.Where((_, index) => !echoes.Contains(index)).ToList();
         }
         Replace(document, channels, segments);
+        document.MissingAudioSeconds = missingSeconds;
         return runs;
     }
     public static string Prompt(MeetingDocument document, Settings settings) => MeetingVocabulary.Prompt(document.Vocabulary, document.Title, settings.Vocabulary, settings.Corrections);

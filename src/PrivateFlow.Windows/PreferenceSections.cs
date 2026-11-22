@@ -27,7 +27,7 @@ internal static class PreferenceSections
         new(nameof(Settings.Profiles), Profiles),
         new(nameof(Settings.MeetingLanguages), MeetingDefaults), new(nameof(Settings.RetainMeetingAudio), MeetingDefaults), new(nameof(Settings.MeetingRetentionDays), MeetingDefaults),
         new(nameof(Settings.LocalPolishModel), Models), new(nameof(Settings.MeetingNotesGpuLayers), Models), new(nameof(Settings.MeetingNotesStyle), Models),
-        new(nameof(Settings.SpeechDetection), SpeechRecognition), new(nameof(Settings.KeepModelWarm), SpeechRecognition),
+        new(nameof(Settings.SpeechDetection), SpeechRecognition), new(nameof(Settings.KeepModelWarm), SpeechRecognition), new(nameof(Settings.KeepDictationClips), SpeechRecognition),
         new(nameof(Settings.EnginePath), SpeechRecognition, true), new(nameof(Settings.ModelPath), SpeechRecognition, true),
         new(nameof(Settings.LocalRewriteEnginePath), SpeechRecognition, true), new(nameof(Settings.LocalRewriteModelPath), SpeechRecognition, true),
         new(nameof(Settings.VadModelPath), SpeechRecognition, true),

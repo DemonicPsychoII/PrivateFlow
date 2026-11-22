@@ -95,13 +95,19 @@ internal static class ModelList
     // Two paths name the same file once the links on them are resolved.
     private static bool SamePath(string first, string second) =>
         first.Length > 0 && second.Length > 0 && string.Equals(ModelFiles.RealPath(first), ModelFiles.RealPath(second), StringComparison.OrdinalIgnoreCase);
-    // The model and, for the language models, the llama.cpp archives their setup fetches. A speech model alone: Apply fetches the engine.
-    public static long DownloadBytes(ListedModel model, bool nvidiaGpu) => model.Pinned.Bytes + model.Use switch
+    // The llama.cpp archives the setup of a language model fetches with it. A speech model comes alone: Apply fetches the engine.
+    public static IReadOnlyList<PinnedFile> Runtimes(ListedModel model, bool nvidiaGpu) => model.Use switch
     {
-        ModelUse.Polish => ModelCatalogue.LlamaRuntimes(false, nvidiaGpu).Sum(runtime => runtime.Bytes),
-        ModelUse.Notes => ModelCatalogue.LlamaRuntimes(true, nvidiaGpu).Sum(runtime => runtime.Bytes),
-        _ => 0
+        ModelUse.Polish => ModelCatalogue.LlamaRuntimes(false, nvidiaGpu),
+        ModelUse.Notes => ModelCatalogue.LlamaRuntimes(true, nvidiaGpu),
+        _ => []
     };
+    public static long DownloadBytes(ListedModel model, bool nvidiaGpu) => model.Pinned.Bytes + Runtimes(model, nvidiaGpu).Sum(runtime => runtime.Bytes);
+    // A cancelled install leaves the download it was writing, up to the whole model; it is never used, and the next try starts it again.
+    // Only the files that install fetches go, by name: partial downloads of other files stay. A partial llama.cpp archive of the same name
+    // left by the other language model's setup goes too; either setup would have continued that same file.
+    public static void RemovePartialDownloads(string dataRoot, ListedModel model, bool nvidiaGpu) =>
+        ModelFiles.RemovePartialDownloads(dataRoot, model.Pinned, Runtimes(model, nvidiaGpu));
     public static string Size(long bytes) => bytes == 0 ? "0 MB" : bytes < 1_000_000_000 ? $"{Math.Max(1, Math.Round(bytes / 1e6)):0} MB" : SpeechRuntime.Gigabytes(bytes) + " GB";
 
     public static bool UsesLocalPolish(Settings settings) =>

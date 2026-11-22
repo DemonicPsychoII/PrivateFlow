@@ -8,8 +8,9 @@ using PrivateFlow.Core;
 using Clipboard = System.Windows.Clipboard;
 using Control = System.Windows.Controls.Control;
 using RichTextBox = System.Windows.Controls.RichTextBox;
+using PrivateFlow.Windows;
 
-namespace PrivateFlow.Windows;
+namespace PrivateFlow.Verification;
 
 // Explicit diagnostic: pastes only into a disposable fixture in a child process (Private Flow
 // never pastes into itself). The fixture moves through a plain field, a rich document field
@@ -48,8 +49,8 @@ internal static class InsertionVerification
                 const string sentinel = "previous clipboard content";
                 Native.SetClipboardText(sentinel);
                 var text = $"Private Flow paste check {Stages[i]}";
-                bool Valid() => policy.CanInsert(session, Native.CaptureTarget(), Native.ModifiersDown, text);
-                var result = Valid() ? await Native.PasteAsync(text, Valid) : InsertionResult.Unavailable;
+                bool Valid(FocusTarget current) => policy.CanInsert(session, current, Native.ModifiersDown, text);
+                var result = Valid(Native.CaptureTarget()) ? await Native.PasteAsync(text, Valid) : InsertionResult.Unavailable;
                 await Task.Delay(300);
                 var restored = Clipboard.ContainsText() && Clipboard.GetText() == sentinel;
                 File.WriteAllText(Path.Combine(output, $"stage-{i}.done"), "");

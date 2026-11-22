@@ -10,6 +10,8 @@ namespace PrivateFlow.Windows;
 internal interface IDictationView
 {
     bool OtherOperationActive { get; }
+    // An update was confirmed and runs until Private Flow restarts or the installer ends.
+    bool Updating { get; }
     bool WindowShowing { get; }
     bool MicrophoneSelected { get; }
     // The stored preferences with the choices the window shows, on a copy; the shared settings keep only stored values.
@@ -46,6 +48,7 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
     // The dictation's one state: set only to what DictationTable.Next returns, in Handle.
     private DictationState state;
     private IAudioSource? recorder;
+    private KeptAudio? kept;
     private Task<SpeechResult>? speechTask;
     private Settings? sessionSettings;
     private CancellationTokenSource? cancellation;
@@ -134,7 +137,10 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
         });
     }
     private const string ReleasedTooSoon = "Nothing was transcribed. Hold the shortcut while you speak.";
-    public void ForgetResult() { LastResult = null; LastFileSegments = null; }
+    // The last dictation's audio and language while Keep dictations as test clips is on; null otherwise.
+    public (float[] Samples, string Language)? LastClip { get; private set; }
+    public void ForgetResult() { LastResult = null; LastFileSegments = null; ForgetClip(); }
+    public void ForgetClip() { LastClip = null; kept = null; }
     public void ShowRecordingProgress()
     {
         if (recorder is null) return;
@@ -161,13 +167,20 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
     public void Start(bool explicitProfile = false, ActivationShortcut? shortcut = null)
     {
         if (App.DiagnosticMode) { view.ShowStatus("Diagnostic instance: capture and insertion disabled."); return; }
-        _ = StartAsync(explicitProfile, shortcut, microphoneId => new AudioRecorder(devices.Open(microphoneId)));
+        // The test build plays the next clip of its audio library in place of the microphone.
+        _ = StartAsync(explicitProfile, shortcut, App.LibraryAudio is { } library ? library.Open : microphoneId => new AudioRecorder(devices.Open(microphoneId)));
     }
     // The verification passes a synthetic source for the microphone. stage hears "pill" once the pill has its frame, before the start
     // checks whether it was ended meanwhile, and "recording" once the microphone records.
     internal async Task StartAsync(bool explicitProfile, ActivationShortcut? shortcut, Func<string, IAudioSource> openMicrophone, Action<string>? stage = null)
     {
         if (state != DictationState.Idle) return;
+        if (view.Updating)
+        {
+            Report(RefusedKey, NoticeKind.Warning, "Dictation did not start", UpdateGate.StartRefusal);
+            if (!view.WindowShowing) tray.ShowBalloon(5000, "Private Flow", UpdateGate.StartRefusal, Forms.ToolTipIcon.Info);
+            return;
+        }
         if (view.OtherOperationActive)
         {
             const string refusal = "Finish the meeting, or the setup or check under Speech recognition, before starting dictation.";
@@ -190,6 +203,8 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
         session = policy.Begin(target);
         ClearOwnNotices();
         sessionSettings = snapshot;
+        LastClip = null;
+        kept = snapshot.KeepDictationClips ? new KeptAudio() : null;
         heldShortcut = snapshot.ShortcutBehavior == ShortcutBehavior.HoldToTalk ? shortcut : null;
         cancellation = new CancellationTokenSource();
         var started = session;
@@ -222,7 +237,8 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
             hud!.Starting = false;
             stage?.Invoke("recording");
             // A cold speech worker is a new process; started off this thread, it does not hold the interface.
-            speechTask = Task.Run(() => ConsumeAsync(recording.Chunks, () => recording.Seconds, snapshot, token, LoadingWithLowMemory));
+            var keeping = kept;
+            speechTask = Task.Run(() => ConsumeAsync(recording.Chunks, () => recording.Seconds, snapshot, token, LoadingWithLowMemory, keeping));
             _ = ObserveSpeechAsync(speechTask, started);
         }
         catch (Exception ex)
@@ -276,30 +292,40 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
             result = result with { GpuMemoryNote = GpuMemoryNote() };
             LastResult = result;
             LastFileSegments = null;
+            // Kept only with a language the clip can carry; a dictation whose language stayed undetermined is not offered.
+            LastClip = kept?.Samples is { } clip && SpeechLanguages.IsSpoken(sessionSettings!.Language) ? (clip, sessionSettings.Language) : null;
+            kept = null;
             view.ShowResult(raw, final);
-            var insertion = DictationTable.Insertion(skip.IsCancellationRequested, final, sessionSettings!.AutoInsert, waited);
+            var insertion = DictationTable.Insertion(skip.IsCancellationRequested, final, sessionSettings!.AutoInsert, waited,
+                DictationTable.PasteAllowed(App.LibraryAudio is not null, App.DiagnosticMode, DisposableTestVm.IsThisComputer));
             // Cancelled while the polish waited or ran after the wait: the recognized text stays here, never pasted or copied.
             if (insertion == DictationInsertion.KeepClean) { view.ShowStatus("Cancelled. Nothing was pasted; the recognized text is kept here."); return; }
             ShowNotices(result);
             if (insertion == DictationInsertion.NothingRecognized) { view.ShowStatus("Ready"); Report(OutcomeKey, NoticeKind.Note, "No text recognized", "Nothing was inserted."); return; }
             if (insertion == DictationInsertion.Review) { view.ShowStatus($"Ready to review • {watch.Elapsed.TotalSeconds:0.0}s"); view.OpenPage("Dictate"); return; }
+            if (insertion == DictationInsertion.PasteRefused)
+            {
+                view.ShowStatus("Ready");
+                Report(NotPastedKey, NoticeKind.Warning, "Not pasted: " + (App.DiagnosticMode ? "a diagnostic instance does not paste" : "the test build pastes only in the disposable test VM"),
+                    "Use Copy text to take it from the Dictate page.");
+                return;
+            }
             // A very short utterance can finish before the stop shortcut, or in hold to talk the rest of the held
             // shortcut, is released; a paste with Ctrl/Alt still held would become a different shortcut in the target.
             for (var retry = 0; retry < 50 && Native.ModifiersDown; retry++)
                 await Task.Delay(20, token);
             var selected = policy.Target;
             if (DictationTable.RestoresForeground(insertion)) Native.RestoreForeground(selected.Window);
-            bool StillValid() => policy.IsCurrent(operation) && !token.IsCancellationRequested &&
-                policy.CanInsert(operation, Native.CaptureTarget(), Native.ModifiersDown, final);
-            var pasted = StillValid() ? await Native.PasteAsync(final, StillValid, PasteTiming.RestoreDelay(ProcessName(selected.Process))) : InsertionResult.Unavailable;
+            bool StillValid(FocusTarget current) => policy.IsCurrent(operation) && !token.IsCancellationRequested &&
+                policy.CanInsert(operation, current, Native.ModifiersDown, final);
+            var pasted = StillValid(Native.CaptureTarget()) ? await Native.PasteAsync(final, StillValid, PasteTiming.RestoreDelay(ProcessName(selected.Process))) : InsertionResult.Unavailable;
             var seconds = $"{watch.Elapsed.TotalSeconds:0.0}s";
             if (pasted == InsertionResult.Complete) { view.ShowStatus($"Pasted • {seconds}"); return; }
             // Do not pop the window over the user's work: leave the text on the clipboard instead, unless the dictation waited and the
-            // user may have copied something else since.
-            var copied = DictationTable.CopiesWhenNotPasted(insertion) && Native.SetClipboardText(final);
-            var now = Native.CaptureTarget();
-            var reason = !selected.Safe || (now.Window == selected.Window && !now.Safe) ? "password field or Private Flow itself"
-                : now.Window != selected.Window ? "the selected window is no longer in front" : "Windows blocked the paste";
+            // user may have copied something else since, or the clipboard could not be saved for the paste.
+            var clipboardUnreadable = pasted == InsertionResult.ClipboardUnreadable;
+            var copied = DictationTable.CopiesWhenNotPasted(insertion, clipboardUnreadable) && Native.SetClipboardText(final);
+            var reason = DictationPolicy.NotPastedReason(selected, Native.CaptureTarget(), clipboardUnreadable);
             view.ShowStatus(copied ? $"Copied • press Ctrl+V • {seconds}" : "Ready");
             Report(NotPastedKey, NoticeKind.Warning, "Not pasted: " + reason, copied ? "The text is on the clipboard; press Ctrl+V where you want it." : "Use Copy text to take it from the Dictate page.");
             tray.ShowBalloon(2500, "Private Flow", copied ? "Copied — press Ctrl+V to paste." : "Open Private Flow to copy your text.", Forms.ToolTipIcon.None);
@@ -326,13 +352,16 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
     {
         var recording = recorder!; recorder = null;
         try { await recording.StopAsync(); if (speechTask is not null) await speechTask; }
+        // The cancel itself ends the speech task with OperationCanceledException; that is no error to report.
+        catch (OperationCanceledException) { }
         catch (Exception ex) { Report(FailedKey, NoticeKind.Error, "The recording stopped with an error", ex.Message); }
-        finally { recording.Dispose(); Handle(DictationEvent.Ended); }
+        finally { speechTask = null; recording.Dispose(); Handle(DictationEvent.Ended); }
         Conclude(then);
     }
     public async Task TranscribeFileAsync(string path)
     {
         var snapshot = view.DictationPreferences();
+        LastClip = null;
         if (!Handle(DictationEvent.FileChosen).Actions.HasFlag(DictationActions.TranscribeFile)) return;
         cancellation = new(); view.ShowFileTranscription(); ClearOwnNotices();
         var token = cancellation.Token;
@@ -393,7 +422,7 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
     // Transcribes a dictation's windows as the recording delivers them; seconds is the recorded length once the chunks end.
     // loadingWithLowMemory hears the GPU memory when the model loads into too little of it, and null once the load is done.
     internal static async Task<SpeechResult> ConsumeAsync(System.Threading.Channels.ChannelReader<AudioChunk> chunks, Func<double> seconds, Settings snapshot, CancellationToken token,
-        Action<GpuMemory?>? loadingWithLowMemory = null)
+        Action<GpuMemory?>? loadingWithLowMemory = null, KeptAudio? kept = null)
     {
         // The model loads while the user speaks: a dictation shorter than a window sends its only chunk at the stop. A load that
         // fails, such as when another program holds the GPU memory, ends the recording at once with its reason; chunks wait meanwhile.
@@ -404,6 +433,7 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
         var languages = new Dictionary<string, double>();
         await foreach (var chunk in chunks.ReadAllAsync(token))
         {
+            kept?.Add(chunk.Samples);
             var result = await WhisperEngine.TranscribeChunkAsync(chunk.Samples, snapshot, token, WhisperEngine.AllowedLanguages(snapshot));
             SegmentAssembly.Append(segments, result.Segments, chunk.Offset);
             languages[result.Language] = languages.GetValueOrDefault(result.Language) + result.Seconds;

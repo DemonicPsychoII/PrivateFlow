@@ -389,7 +389,7 @@ static class SyntheticMeetings
         Jonas: Tschüss zusammen. ## S
         """;
 
-    // Held back in round 1 (written after the rules were fixed at commit e064a15); used to change the rules in round 2.
+    // Held back in round 1 (written after the rules were fixed for round 1); used to change the rules in round 2.
     public const string Disagreement = """
         Title: Architecture review - sync engine
         Vocabulary: Mara, Felix, Jun, Postgres, SQLite
@@ -518,7 +518,7 @@ static class SyntheticMeetings
         Valeria: Bueno, that's it for today. Gracias a todos, nos vemos. ## S
         """;
 
-    // Held back in round 2: written after the rules were fixed at commit bd101bc and not used to change them.
+    // Held back in round 2: written after the rules were fixed for round 2 and not used to change them.
     public const string Planning = """
         Title: Q3 conference planning
         Vocabulary: Hana, Marek, Odile, Riverside, Lyon

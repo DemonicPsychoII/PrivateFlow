@@ -26,7 +26,7 @@ public static partial class RewriteIntegrity
     private static IEnumerable<string> Critical(string text) => CriticalToken().Matches(text).Select(m => m.Value.ToLowerInvariant())
         .Concat(Numbers().Matches(text).Select(m => Regex.Replace(m.Value.Replace(',', '.'), @"\s+", "")))
         .OrderBy(s => s, StringComparer.Ordinal);
-    [GeneratedRegex(@"(?<![\p{L}\p{N}])(?:not|never|no|cannot|\p{L}+n['’]t|nicht|nie|niemals|kein\p{L}*|niemand\p{L}*|nichts|ohne|weder)(?![\p{L}\p{N}])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?<![\p{L}\p{N}])(?:not|never|no|cannot|\p{L}+n['’]t|nicht|nie|niemals|kein\p{L}*|niemand\p{L}*|nichts|ohne|weder|nunca|jam[aá]s|nadie|nada|ning[uú]n\p{L}*|tampoco|sin|ni)(?![\p{L}\p{N}])", RegexOptions.IgnoreCase)]
     private static partial Regex CriticalToken();
     [GeneratedRegex(@"[+\-−]?\d+(?:[.,:]\d+)*(?:\s*(?:mAh|kWh|MHz|GHz|kHz|µm|µs|mm|cm|km|nm|mg|kg|ms|ns|ml|mV|mA|Ah|Hz|V|A|W|K|%)(?!\p{L}))?")]
     private static partial Regex Numbers();

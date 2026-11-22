@@ -230,6 +230,10 @@ static class OutputStyleChecks
         Check(!RewriteIntegrity.PreservesMeaning("Do not delete the 42 files.", "Delete the 42 files.", false), "rewrite cannot remove negation");
         Check(!RewriteIntegrity.PreservesMeaning("I didn’t delete it.", "I deleted it.", false), "rewrite preserves typographic negative contractions");
         Check(!RewriteIntegrity.PreservesMeaning("Niemand hat die Datei gelöscht.", "Jemand hat die Datei gelöscht.", false), "rewrite preserves German negative pronouns");
+        Check(!RewriteIntegrity.PreservesMeaning("Nunca borres los archivos.", "Borra los archivos.", false)
+            && !RewriteIntegrity.PreservesMeaning("Nadie ha visto ningún error.", "Alguien ha visto un error.", false)
+            && !RewriteIntegrity.PreservesMeaning("Envíalo sin el anexo.", "Envíalo con el anexo.", false)
+            && RewriteIntegrity.PreservesMeaning("Nunca borres los archivos, eh.", "Nunca borres los archivos.", false), "rewrite preserves Spanish negations");
         Check(!RewriteIntegrity.PreservesMeaning("The voltage is 42 V.", "The voltage is 24 V.", false), "rewrite cannot change numerical facts");
         Check(!RewriteIntegrity.PreservesMeaning("The delay is 42ms.", "The delay is 24ms.", false), "rewrite protects numbers attached to units");
         Check(!RewriteIntegrity.PreservesMeaning("The voltage is 42 V.", "The voltage is 42 A.", false), "rewrite cannot swap physical units");
@@ -355,6 +359,43 @@ static class OutputStyleChecks
         await MockRewrite("stop", "Delete the 42 files.", false, "complete API response still rejects removed negation");
         await MockRewrite("stop", "Do not delete the 24 files.", false, "complete API response rejects changed numerical facts");
         await MockRewrite("stop", "Do not delete the 42 files.", true, "complete API response with preserved facts succeeds");
+    }
+
+    // An endpoint that takes the request and never answers: the rewrite gives up exactly at its time limit, a TimeoutException that
+    // makes the dictation use Clean. The clock is moved by hand, so the check does not wait the 10 s.
+    public static async Task VerifyConciseTimeout()
+    {
+        Check(PrivateFlow.Windows.ConciseRewriter.TimeLimit("short").TotalSeconds == 10 && PrivateFlow.Windows.ConciseRewriter.TimeLimit(new string('a', 1400)).TotalSeconds == 20
+            && PrivateFlow.Windows.ConciseRewriter.TimeLimit(new string('a', 12000)).TotalSeconds == 45, "Concise allows 10 s, 6 s plus 1 s per 100 characters, at most 45 s");
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0); listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        var variable = "PRIVATE_FLOW_TEST_KEY_" + Guid.NewGuid().ToString("N"); Environment.SetEnvironmentVariable(variable, "synthetic-key");
+        using var end = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var received = new TaskCompletionSource();
+        var server = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync(end.Token); using var stream = client.GetStream();
+            var buffer = new byte[4096];
+            await stream.ReadAtLeastAsync(buffer, 1, cancellationToken: end.Token);
+            received.TrySetResult();
+            try { await Task.Delay(Timeout.Infinite, end.Token); } catch (OperationCanceledException) { }
+        });
+        try
+        {
+            var clock = new ManualClock();
+            var settings = new PrivateFlow.Windows.Settings { RewriteEndpoint = $"http://127.0.0.1:{port}/v1", RewriteKeyVariable = variable };
+            var rewrite = PrivateFlow.Windows.ConciseRewriter.RewriteAsync("Do not delete the 42 files.", settings, CancellationToken.None, clock);
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            clock.Advance(TimeSpan.FromSeconds(9.9));
+            await Task.Delay(300);
+            var waitingBefore = !rewrite.IsCompleted;
+            clock.Advance(TimeSpan.FromSeconds(0.2));
+            string? message = null;
+            try { await rewrite.WaitAsync(TimeSpan.FromSeconds(10)); }
+            catch (TimeoutException error) { message = error.Message; }
+            Check(waitingBefore && message == "API timed out.", $"an endpoint that never answers is still awaited at 9.9 s and gives up at 10 s with \"API timed out.\", which makes the dictation use Clean (got {message ?? "no timeout"})");
+        }
+        finally { end.Cancel(); listener.Stop(); Environment.SetEnvironmentVariable(variable, null); try { await server; } catch (Exception) { } }
     }
 
     public static void VerifyBacktrackOnDevice()

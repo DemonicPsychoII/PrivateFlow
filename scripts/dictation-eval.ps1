@@ -7,15 +7,21 @@ param(
     [string[]]$Configuration = @('auto', 'auto-no-detection', 'fixed'),
     # Real FLEURS utterances per language; 0 leaves real speech out.
     [int]$RealSpeech = 30,
+    # Writes the recordings as an audio library for the test build (--library-audio) into this folder outside the repository, then stops.
+    [string]$LibraryOutput = '',
+    # en, de or es measures only the recordings in that language; empty measures all.
+    [ValidateSet('', 'en', 'de', 'es')][string]$Language = '',
+    # Downloads the assets and synthesizes the clips, then stops (scripts/verify.ps1 does this once before its jobs).
+    [switch]$PrepareOnly,
     [string]$EnginePath = '', [string]$ModelPath = '', [string]$VadModelPath = '', [string]$EngineLabel = '', [string]$MeetingModelPath = ''
 )
 . (Join-Path $PSScriptRoot 'eval-common.ps1')
-$App = Get-EvalApp $App
+$App = Get-VerificationHost $App
 # powershell.exe -File passes a list as one comma-separated string.
 $Configuration = @($Configuration | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 foreach ($taskEntry in $Configuration) { if ($taskEntry -notmatch '^(auto|fixed)(-no-detection)?$') { throw "Unknown configuration $taskEntry." } }
 $taskEngine = Resolve-Engine $EnginePath $ModelPath $VadModelPath $EngineLabel $MeetingModelPath
-$taskRoot = Join-Path $EvalArtifacts 'dictation-eval'
+$taskRoot = Join-Path $EvalOutput 'dictation-eval'
 $taskData = Join-Path $taskRoot 'data'; $taskReports = Join-Path $taskRoot 'reports'
 foreach ($taskFolder in $taskData, $taskReports) { New-Item -ItemType Directory -Force -Path $taskFolder | Out-Null }
 $taskVoices = Get-VoiceTable
@@ -54,8 +60,8 @@ Add-Case 'numbered' 'en' 'Steps numbered item flash the board numbered item rese
     (Check 'Spoken formatting numbers dictated items' 'Clean' @{ Includes = "`n2. "; Text = $true })) }
 Add-Case 'email' 'en' 'Hi Anna, thanks for the update. I will send it by [Friday]. Best regards, Alex.' @{ SpokenFormatting = $true; Checks = @(
     (Check 'Spoken formatting lays out an English email greeting' 'Clean' @{ Includes = "Hi Anna,`n`n"; Text = $true }), (Check 'Spoken formatting lays out an English email closing' 'Concise' @{ Includes = ",`nAlex"; Text = $true })) }
-Add-Case 'snippet' 'en' 'Please add my signature at the end.' @{ Snippets = @(Rule 'my signature' "Alex Meyer`nCreative Engineer"); Edited = 'Please add Alex Meyer Creative Engineer at the end.'; Checks = @(
-    (Check 'Clean expands a snippet' 'Clean' @{ Includes = "Alex Meyer`nCreative Engineer"; Text = $true }), (Check 'Concise keeps the snippet body' 'Concise' @{ Includes = "Alex Meyer`nCreative Engineer"; Text = $true }),
+Add-Case 'snippet' 'en' 'Please add my signature at the end.' @{ Snippets = @(Rule 'my signature' "Alex Meyer`nTest Engineer"); Edited = 'Please add Alex Meyer Test Engineer at the end.'; Checks = @(
+    (Check 'Clean expands a snippet' 'Clean' @{ Includes = "Alex Meyer`nTest Engineer"; Text = $true }), (Check 'Concise keeps the snippet body' 'Concise' @{ Includes = "Alex Meyer`nTest Engineer"; Text = $true }),
     (Check 'Exact leaves the snippet phrase' 'Exact' @{ Includes = 'my signature' })) }
 Add-Case 'alias' 'en' 'I dictated this with private flow today.' @{ Corrections = @(Rule 'private flow' 'PrivateFlow'); Edited = 'I dictated this with PrivateFlow today.'; Checks = @(
     (Check 'Clean applies an alias' 'Clean' @{ Includes = 'PrivateFlow'; Text = $true })) }
@@ -110,7 +116,17 @@ if ($RealSpeech -gt 0) {
             SpokenFormatting = $false; LiteralMode = $false; TechnicalMode = $false; Vocabulary = ''; Corrections = @(); Snippets = @(); Checks = @(); Tags = @($taskItem.Gender) })
     }
 }
+if ($Language) { $taskKept = New-Object System.Collections.Generic.List[object]; $taskCases | Where-Object { $_.Language -eq $Language } | ForEach-Object { $taskKept.Add($_) }; $taskCases = $taskKept }
 Invoke-Synthesis
+if ($LibraryOutput) {
+    $taskSuite = Join-Path $taskRoot 'suite-library.json'
+    ConvertTo-Json -InputObject ([ordered]@{ LanguageMode = 'auto'; Cases = $taskCases.ToArray() }) -Depth 8 | Set-Content -LiteralPath $taskSuite -Encoding UTF8
+    $taskLibrary = [IO.Path]::GetFullPath($LibraryOutput)
+    $null = Invoke-EvalMode $App '--build-audio-library' $taskSuite (Join-Path $taskLibrary 'library.json') $taskData
+    Write-Host "Audio library: $taskLibrary ($((Get-Content -LiteralPath (Join-Path $taskLibrary 'library.json') -Raw | ConvertFrom-Json).Clips) clips)"
+    return
+}
+if ($PrepareOnly) { return }
 
 $taskSummary = New-Object System.Collections.Generic.List[string]
 function Out-Summary([string]$text) { Write-Host $text; $taskSummary.Add($text) }

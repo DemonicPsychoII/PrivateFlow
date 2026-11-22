@@ -83,6 +83,7 @@
           <Button Style="{StaticResource IconButton}" Click="RecoverClick" ToolTip="Recover the last result" AutomationProperties.Name="Recover the last result"><Path Style="{StaticResource Icon}" Data="{StaticResource IconRecover}"/></Button>
           <Button Style="{StaticResource IconButton}" Click="ExportClick" ToolTip="Export text" AutomationProperties.Name="Export text"><Path Style="{StaticResource Icon}" Data="{StaticResource IconDownload}"/></Button>
           <Button Style="{StaticResource IconButton}" Click="ClearClick" ToolTip="Clear" AutomationProperties.Name="Clear the last result"><Path Style="{StaticResource Icon}" Data="{StaticResource IconTrash}"/></Button>
+          <Button x:Name="KeepClipButton" Style="{StaticResource IconButton}" Click="KeepClipClick" ToolTip="Keep as test clip: saves this dictation's audio with the text as corrected, on this PC only" AutomationProperties.Name="Keep as test clip" Visibility="Collapsed"><Path Style="{StaticResource Icon}" Data="{StaticResource IconBookmark}"/></Button>
           <Border Width="1" Height="18" Background="{StaticResource Edge}" Margin="6,0"/>
           <Button x:Name="ImportButton" Style="{StaticResource Ghost}" Foreground="#B8B8B8" Click="ImportClick" ToolTip="Transcribe an audio file on this PC" Padding="8,6">
            <StackPanel Orientation="Horizontal"><Path Style="{StaticResource Icon}" Data="{StaticResource IconAudioFile}" Margin="0,0,8,0"/><TextBlock Text="Transcribe file"/></StackPanel>
@@ -272,7 +273,7 @@
          </DockPanel></Border>
          <Border Style="{StaticResource Row}"><DockPanel>
           <CheckBox x:Name="Literal" DockPanel.Dock="Right" Checked="PreferenceChanged" Unchecked="PreferenceChanged" Margin="24,0,0,0" AutomationProperties.Name="Literal mode"/>
-          <StackPanel><TextBlock Style="{StaticResource RowTitle}" Text="Literal mode"/><TextBlock Style="{StaticResource RowDescription}" Text="Skips aliases, snippets and spoken commands. The Exact text style skips all processing."/></StackPanel>
+          <StackPanel><TextBlock Style="{StaticResource RowTitle}" Text="Literal mode"/><TextBlock Style="{StaticResource RowDescription}" Text="Skips aliases, snippets, spoken commands and the rewrite of Concise and Local polish. The Exact text style skips all processing."/></StackPanel>
          </DockPanel></Border>
         </StackPanel></Border>
        </StackPanel>

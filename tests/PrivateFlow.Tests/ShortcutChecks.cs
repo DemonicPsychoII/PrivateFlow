@@ -97,6 +97,12 @@ static class ShortcutChecks
             (MeetingShortcut.Decide(false, false, false, true, false), "while dictation records or transcribes"), (MeetingShortcut.Decide(false, false, true, false, false), "while a transcript is being finished"),
             (MeetingShortcut.Decide(false, false, false, false, true), "while the speech engine is set up or checked") })
             Check(decision.Action == MeetingShortcutAction.Refuse && decision.Reason.Length > 0, "the meeting shortcut does nothing " + description + " and says why");
+        // An update and a recording exclude each other: the installer stops Private Flow once the download is done.
+        Check(MeetingShortcut.Decide(false, false, false, false, false, updating: true) is { Action: MeetingShortcutAction.Refuse, Reason: UpdateGate.StartRefusal }
+            && MeetingShortcut.Decide(false, true, false, false, false, updating: true).Action == MeetingShortcutAction.Stop,
+            "while an update runs the meeting shortcut starts nothing and says why; a meeting that records can still be stopped");
+        Check(UpdateGate.UpdateRefusal(true, false, false) is { Length: > 0 } && UpdateGate.UpdateRefusal(false, true, false) is { Length: > 0 } && UpdateGate.UpdateRefusal(false, false, true) is { Length: > 0 }
+            && UpdateGate.UpdateRefusal(false, false, false) is null, "an update does not start while a dictation, a meeting or a setup, check or model removal runs, and says why");
         Check(PasteTiming.RestoreDelay("OUTLOOK") == TimeSpan.FromSeconds(3) && PasteTiming.RestoreDelay("mstsc") == TimeSpan.FromSeconds(5) &&
             PasteTiming.RestoreDelay("notepad") == TimeSpan.FromMilliseconds(400) && PasteTiming.RestoreDelay(null) == TimeSpan.FromMilliseconds(400),
             "Office and remote desktops hold the dictated clipboard longer");

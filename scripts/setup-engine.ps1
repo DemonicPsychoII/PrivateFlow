@@ -24,8 +24,8 @@ function Get-Pinned([string]$Key) {
 $taskRequestedBackend = $Backend
 $taskRequestedModel = $Model
 # Medium and large-v3-turbo recognize names and unusual pronunciation better than base but need the
-# GPU: on an RTX 3070 Ti, 20 s of speech took medium 2.5 s with CUDA and 14 s on the CPU (base on the CPU: 1.6 s).
-# On an RTX 4060 Laptop, large-v3-turbo-q8_0 transcribed 40 s of English and German in 0.6 s against
+# GPU: on an NVIDIA GPU, 20 s of speech took medium 2.5 s with CUDA and 14 s on the CPU (base on the CPU: 1.6 s).
+# On an 8 GB NVIDIA GPU, large-v3-turbo-q8_0 transcribed 40 s of English and German in 0.6 s against
 # 1.15 s for medium, loaded in 0.7 s against 1.25 s and matched its accuracy on generated speech.
 # Automatic on the GPU adds large-v3 (3.1 GB) for the meeting and file final pass: it lost about a quarter fewer words
 # than large-v3-turbo on generated meetings and as many on real speech, but takes twice as long, which dictation cannot afford.
@@ -58,6 +58,16 @@ if ($Download -ne 'none') {
     return
 }
 New-Item -ItemType Directory -Force -Path $taskRuntime,$taskModels,$taskCache | Out-Null
+$taskMissingBytes = 0
+foreach ($taskEntry in @(@{ Pinned = $taskAsset; Folder = $taskCache }, @{ Pinned = (Get-Pinned $Model); Folder = $taskModels },
+        @{ Pinned = $(if ($taskMeetingKey) { Get-Pinned $taskMeetingKey }); Folder = $taskModels }, @{ Pinned = (Get-Pinned 'silero-v6.2.0'); Folder = $taskModels })) {
+    if (-not $taskEntry.Pinned) { continue }
+    $taskExisting = Get-Item -LiteralPath (Join-Path $taskEntry.Folder $taskEntry.Pinned.File) -ErrorAction SilentlyContinue
+    if (-not $taskExisting -or $taskExisting.Length -ne [long]$taskEntry.Pinned.Bytes) { $taskMissingBytes += [long]$taskEntry.Pinned.Bytes }
+}
+$taskInvariant = [Globalization.CultureInfo]::InvariantCulture
+if ($taskMissingBytes -ge 1e9) { Write-Host ([string]::Format($taskInvariant, 'Download size: {0:0.0} GB', $taskMissingBytes / 1e9)) }
+elseif ($taskMissingBytes -gt 0) { Write-Host ([string]::Format($taskInvariant, 'Download size: {0:0} MB', $taskMissingBytes / 1e6)) }
 $taskHash = $taskAsset.Sha256
 $taskArchive = Join-Path $taskCache $taskAsset.File
 Get-VerifiedDownload $taskAsset.Url $taskArchive $taskHash

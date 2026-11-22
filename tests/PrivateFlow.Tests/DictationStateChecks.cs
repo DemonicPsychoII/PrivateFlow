@@ -103,6 +103,16 @@ static class DictationStateChecks
         Check(waited == DictationInsertion.PasteAfterWait && direct == DictationInsertion.Paste && !DictationTable.RestoresForeground(waited) && !DictationTable.CopiesWhenNotPasted(waited)
             && DictationTable.RestoresForeground(direct) && DictationTable.CopiesWhenNotPasted(direct) && !DictationTable.CopiesWhenNotPasted(DictationInsertion.KeepClean),
             "a dictation that waited for the notes is not brought back to its window and leaves the clipboard alone; one that did not wait is restored and copied as before");
+        Check(!DictationTable.CopiesWhenNotPasted(direct, clipboardUnreadable: true) && DictationTable.CopiesWhenNotPasted(direct, clipboardUnreadable: false),
+            "a clipboard the paste could not save is not replaced by the copy either");
+        // The test build pastes only in the disposable test VM, a diagnostic instance never; review-first and empty text stay as they are.
+        Check(DictationTable.PasteAllowed(testBuild: false, diagnostic: false, inTestVm: false) && DictationTable.PasteAllowed(testBuild: true, diagnostic: false, inTestVm: true)
+            && !DictationTable.PasteAllowed(testBuild: true, diagnostic: false, inTestVm: false) && !DictationTable.PasteAllowed(testBuild: false, diagnostic: true, inTestVm: true),
+            "the app pastes; the test build only in the test VM; a diagnostic instance never");
+        var refused = DictationTable.Insertion(false, "text", true, false, pasteAllowed: false);
+        Check(refused == DictationInsertion.PasteRefused && !DictationTable.RestoresForeground(refused) && !DictationTable.CopiesWhenNotPasted(refused)
+            && DictationTable.Insertion(false, "text", false, false, pasteAllowed: false) == DictationInsertion.Review && DictationTable.Insertion(false, " ", true, false, pasteAllowed: false) == DictationInsertion.NothingRecognized,
+            "where pasting is refused the text stays on the Dictate page: nothing is pasted, brought to the front or copied");
 
         // The one state: what is recording, busy and idle, and how everything ends.
         Check(States.Count(state => DictationTable.IsRecording(state) || DictationTable.IsBusy(state)) == States.Length - 1 && !DictationTable.IsRecording(Idle) && !DictationTable.IsBusy(Idle)

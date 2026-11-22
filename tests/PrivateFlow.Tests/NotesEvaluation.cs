@@ -244,7 +244,7 @@ static class NotesReport
         SyntheticMeeting.Parse("disagreement", SyntheticMeetings.Disagreement), SyntheticMeeting.Parse("one-label", SyntheticMeetings.OneLabel),
         SyntheticMeeting.Parse("code-switch", SyntheticMeetings.CodeSwitch),
     ];
-    // Held back in round 2: written after the rules were fixed at commit bd101bc.
+    // Held back in round 2: written after the rules were fixed for round 2.
     public static IReadOnlyList<SyntheticMeeting> HeldBack { get; } =
     [
         SyntheticMeeting.Parse("planning", SyntheticMeetings.Planning), SyntheticMeeting.Parse("escalation", SyntheticMeetings.Escalation),

@@ -18,16 +18,18 @@ param(
     [string]$Title = 'Meeting', [string]$DictationVocabulary = '', [string]$Corrections = '',
     # Appended to the report name to keep variants apart.
     [string]$Tag = '',
-    # Your own recordings (see docs\TEST_COVERAGE.md), scored with counts only; none on CI or other PCs. -Scenario none runs only them.
-    [string]$Recordings = $env:PRIVATE_FLOW_EVALUATION_RECORDINGS
+    # Your own recordings, scored with counts only; none on CI or other PCs. -Scenario none runs only them.
+    [string]$Recordings = $env:PRIVATE_FLOW_EVALUATION_RECORDINGS,
+    # Downloads the assets and synthesizes the clips of the selected scenarios, then stops.
+    [switch]$PrepareOnly
 )
 . (Join-Path $PSScriptRoot 'eval-common.ps1')
-$App = Get-EvalApp $App
+$App = Get-VerificationHost $App
 # powershell.exe -File passes a list as one comma-separated string.
 $Configuration = @($Configuration | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 foreach ($taskEntry in $Configuration) { if ($taskEntry -notmatch '^(auto|en|de|es)(-no-detection)?$') { throw "Unknown configuration $taskEntry." } }
 $taskEngine = Resolve-Engine $EnginePath $ModelPath $VadModelPath $EngineLabel $MeetingModelPath
-$taskRoot = Join-Path $EvalArtifacts 'meeting-eval'
+$taskRoot = Join-Path $EvalOutput 'meeting-eval'
 $taskData = Join-Path $taskRoot 'data'; $taskScenarios = Join-Path $taskRoot 'scenarios'; $taskReports = Join-Path $taskRoot 'reports'
 foreach ($taskFolder in $taskData, $taskReports) { New-Item -ItemType Directory -Force -Path $taskFolder | Out-Null }
 if (Test-Path -LiteralPath $taskScenarios) { Remove-Item -LiteralPath $taskScenarios -Recurse -Force }
@@ -411,6 +413,7 @@ $taskSelected = @($taskList | Where-Object { $name = $_.Name; @($taskPatterns | 
 $taskRecordings = $(if ($Recordings -and (Test-Path -LiteralPath $Recordings -PathType Container)) { (Resolve-Path -LiteralPath $Recordings).Path })
 if ($taskSelected.Count -eq 0 -and -not $taskRecordings) { throw "No scenario matches $Scenario." }
 if ($taskSelected.Count -gt 0) { Invoke-Synthesis }
+if ($PrepareOnly) { return }
 foreach ($taskEntry in $taskSelected) {
     $taskFolder = Join-Path $taskScenarios $taskEntry.Name; New-Item -ItemType Directory -Force -Path $taskFolder | Out-Null
     ConvertTo-Json -InputObject $taskEntry -Depth 8 | Set-Content -LiteralPath (Join-Path $taskFolder 'scenario.json') -Encoding UTF8

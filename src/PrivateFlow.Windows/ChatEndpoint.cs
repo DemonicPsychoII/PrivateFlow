@@ -10,7 +10,8 @@ namespace PrivateFlow.Windows;
 public static class ChatEndpoint
 {
     private static readonly HttpClient http = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
-    public static async Task<string> CompleteAsync(Settings settings, string system, string user, int maximumTokens, TimeSpan timeLimit, CancellationToken cancellation)
+    // clock decides when timeLimit has passed; the checks pass a clock they move by hand instead of waiting for it.
+    public static async Task<string> CompleteAsync(Settings settings, string system, string user, int maximumTokens, TimeSpan timeLimit, CancellationToken cancellation, TimeProvider? clock = null)
     {
         if (string.IsNullOrWhiteSpace(settings.RewriteEndpoint)) throw new InvalidOperationException("No API base URL configured. Set it under Settings > Text style.");
         var key = Environment.GetEnvironmentVariable(settings.RewriteKeyVariable)
@@ -22,8 +23,8 @@ public static class ChatEndpoint
             !(endpoint.Scheme == "https" || (endpoint.Scheme == "http" && endpoint.IsLoopback)))
             throw new InvalidOperationException("API base URL must use https (http only for loopback hosts).");
         if (string.IsNullOrWhiteSpace(settings.RewriteModel)) throw new InvalidOperationException("No API model configured.");
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        timeout.CancelAfter(timeLimit);
+        using var limit = new CancellationTokenSource(timeLimit, clock ?? TimeProvider.System);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation, limit.Token);
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {
             Content = JsonContent.Create(new

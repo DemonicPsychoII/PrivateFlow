@@ -38,6 +38,25 @@ internal static class SpeechSetup
         }
         finally { Gate.Release(); }
     }
+    // The Visual C++ runtime whisper.cpp needs: the documented registry value of its x64 redistributable, or its DLLs in System32.
+    internal static bool VisualCppRuntimeInstalled
+    {
+        get
+        {
+            object? installed = null;
+            // The checks compile this file for every platform.
+            if (OperatingSystem.IsWindows()) try
+            {
+                using var key = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64)
+                    .OpenSubKey(@"SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64");
+                installed = key?.GetValue("Installed");
+            }
+            catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException) { }
+            var system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            return PrivateFlow.Core.SpeechRuntime.VisualCppRuntimePresent(installed,
+                new[] { "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll" }.All(file => File.Exists(Path.Combine(system, file))));
+        }
+    }
     // A full path names the user's folders on screen; its file name says enough.
     internal static string FailureMessage(string errors) =>
         "Setup failed" + (errors.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() is { } line
@@ -131,12 +150,13 @@ internal static class SpeechSetup
 
     // Once per installed build, Automatic choices are brought to the current recommendation. The first
     // setup stays an explicit action, and paths typed in by hand are left alone.
-    public static async Task<(string? Notice, string? Error, IReadOnlyList<string> Changed)> FollowRecommendationAsync(Settings settings)
+    public static bool FollowsRecommendation(Settings settings) => !settings.SpeechPathsCustom && settings.SpeechSetupVersion != BuildIdentity && File.Exists(settings.EnginePath)
+        && (settings.SpeechBackend == "auto" || settings.SpeechModel == "auto");
+    public static async Task<(string? Notice, string? Error, IReadOnlyList<string> Changed)> FollowRecommendationAsync(Settings settings, CancellationToken token = default)
     {
-        if (settings.SpeechPathsCustom || settings.SpeechSetupVersion == BuildIdentity || !File.Exists(settings.EnginePath)) return (null, null, []);
-        if (settings.SpeechBackend != "auto" && settings.SpeechModel != "auto") return (null, null, []);
+        if (!FollowsRecommendation(settings)) return (null, null, []);
         var (previousEngine, previousModel) = (settings.EnginePath, settings.ModelPath);
-        var (error, changed) = await InstallAsync(settings, "setup-engine.ps1", ["-Backend", settings.SpeechBackend, "-Model", settings.SpeechModel, "-SetupVersion", BuildIdentity], CancellationToken.None);
+        var (error, changed) = await InstallAsync(settings, "setup-engine.ps1", ["-Backend", settings.SpeechBackend, "-Model", settings.SpeechModel, "-SetupVersion", BuildIdentity], token);
         if (error is not null) return (null, "Could not bring the speech setup up to date; the current one stays in use. Private Flow tries again at the next start.", []);
         return string.Equals(previousEngine, settings.EnginePath, StringComparison.OrdinalIgnoreCase) && string.Equals(previousModel, settings.ModelPath, StringComparison.OrdinalIgnoreCase)
             ? (null, null, changed) : ($"Speech recognition switched to the recommended setup: {Processor(settings.EnginePath)}, {ModelName(settings.ModelPath)}.", null, changed);

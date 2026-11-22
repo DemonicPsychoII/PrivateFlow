@@ -1,7 +1,8 @@
 # Removes a default installation of Private Flow from this PC: the program folder %LOCALAPPDATA%\Programs\PrivateFlow and
 # the installer's leftover copies next to it, the data folder %LOCALAPPDATA%\PrivateFlow with everything in it (settings, its lock files,
 # cloud reader token, models, runtimes, downloads, saved meetings with transcripts, notes and audio, and anything put
-# there by hand), the Start menu shortcut, the autostart entry, and the installer's and updater's leftovers in %TEMP%.
+# there by hand), the dictations kept as test clips in %USERPROFILE%\PrivateFlowEvaluation\dictation-clips (audio and the
+# corrected text), the Start menu shortcut, the autostart entry, and the installer's and updater's leftovers in %TEMP%.
 # A relocated or custom installation is refused. It lists everything first and deletes only after the confirmation word,
 # or with -Force. -WhatIf only lists.
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -45,12 +46,15 @@ $localAppData = [IO.Path]::GetFullPath($localAppData).TrimEnd('\')
 $programFolder = "$localAppData\Programs\PrivateFlow"
 $dataFolder = "$localAppData\PrivateFlow"
 $programFile = "$programFolder\PrivateFlow.exe"
+# Keep as test clip writes here (DictationClips.Root); only with a user profile that is a full local path.
+$userProfile = "$env:USERPROFILE".Trim()
+$clipsFolder = $(if ($userProfile -match '^[A-Za-z]:\\' -and $userProfile.IndexOf(':', 2) -lt 0) { "$([IO.Path]::GetFullPath($userProfile).TrimEnd('\'))\PrivateFlowEvaluation\dictation-clips" } else { $null })
 
 # Why the default folders cannot be handled, or $null: a folder, or a folder on its path below the user profile, is a
 # junction or symbolic link (a relocated installation), or the program folder is not Private Flow's.
 function Get-FolderProblem {
     $profileFolder = $(if ($env:USERPROFILE) { [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\') } else { '' })
-    foreach ($folder in $programFolder, $dataFolder) {
+    foreach ($folder in @($programFolder, $dataFolder) + @($clipsFolder | Where-Object { $_ })) {
         $stop = $(if ($profileFolder -and (Test-Inside $folder $profileFolder)) { $profileFolder } else { [IO.Path]::GetPathRoot($folder).TrimEnd('\') })
         for ($current = $folder; $current.Length -gt $stop.Length; $current = Split-Path $current -Parent) {
             if (Test-Link $current) { return "$current is a junction or symbolic link, so this is a relocated installation." }
@@ -74,7 +78,7 @@ if (Test-Inside $PSScriptRoot $programFolder) {
     try { & $temporaryCopy @PSBoundParameters } finally { Remove-Item -LiteralPath $temporaryCopy -Force -ErrorAction SilentlyContinue -WhatIf:$false }
     exit $LASTEXITCODE
 }
-foreach ($folder in $programFolder, $dataFolder) {
+foreach ($folder in @($programFolder, $dataFolder) + @($clipsFolder | Where-Object { $_ })) {
     if (Test-Inside (Get-Location).ProviderPath $folder) { Set-Location -LiteralPath ([IO.Path]::GetTempPath()) }
     if (Test-Inside ([Environment]::CurrentDirectory) $folder) { [Environment]::CurrentDirectory = [IO.Path]::GetTempPath() }
 }
@@ -157,17 +161,24 @@ if (Test-Path -LiteralPath $dataFolder) {
     Write-Line "      Saved meetings: $($meetings.Count), with their transcripts, notes and audio"
     foreach ($model in Get-ChildItem -LiteralPath "$dataFolder\models" -File -Force -ErrorAction SilentlyContinue) { Write-Line "      Model: $($model.Name)  $(Format-Size $model.Length)" }
 }
+$hasClips = $clipsFolder -and (Test-Path -LiteralPath $clipsFolder)
+if ($hasClips) {
+    $clips = @(Get-ChildItem -LiteralPath $clipsFolder -Directory -Force -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'manifest.json') -PathType Leaf })
+    Write-Line "  $clipsFolder  $(Format-Size (Measure-Tree $clipsFolder))"
+    Write-Line "      Kept test clips: $($clips.Count), each with its audio and the text as you corrected it"
+}
+if ($env:PRIVATE_FLOW_DICTATION_CLIPS) { Write-Line "  Left in place: $($env:PRIVATE_FLOW_DICTATION_CLIPS) (PRIVATE_FLOW_DICTATION_CLIPS); this script does not handle it, delete it by hand if you no longer need it" }
 if ($removeShortcut) { Write-Line "  Start menu shortcut $StartMenuShortcut" }
 elseif ($shortcutTarget) { Write-Line "  Left in place: $StartMenuShortcut (starts '$shortcutTarget', not this installation)" }
 if ($removeAutostart) { Write-Line "  Autostart value PrivateFlow in $AutostartRegistryKey" }
 elseif ($autostartCommand) { Write-Line "  Left in place: autostart value PrivateFlow in $AutostartRegistryKey (starts '$autostartCommand', not this installation)" }
 if ($env:PRIVATE_FLOW_DATA_DIR) { Write-Line "  Left in place: $($env:PRIVATE_FLOW_DATA_DIR) (PRIVATE_FLOW_DATA_DIR); this script does not handle it, delete it by hand if you no longer need it" }
-if (-not ((Test-Path -LiteralPath $programFolder) -or (Test-Path -LiteralPath $dataFolder) -or $leftoverCopies -or $temporaryLeftovers -or $removeShortcut -or $removeAutostart)) {
+if (-not ((Test-Path -LiteralPath $programFolder) -or (Test-Path -LiteralPath $dataFolder) -or $hasClips -or $leftoverCopies -or $temporaryLeftovers -or $removeShortcut -or $removeAutostart)) {
     Write-Line 'Nothing of Private Flow was found. Nothing was removed.'
     exit 0
 }
 Write-Line
-Write-Line 'Everything in these folders is deleted, also files you put there yourself. Saved meetings, their transcripts, notes and audio, the settings and the downloaded models cannot be recovered.' 'Yellow'
+Write-Line 'Everything in these folders is deleted, also files you put there yourself. Saved meetings, their transcripts, notes and audio, kept test clips, the settings and the downloaded models cannot be recovered.' 'Yellow'
 if ($runningProcesses.Count -gt 0) {
     Write-Line 'Private Flow is running:' 'Yellow'
     foreach ($process in $runningProcesses) { Write-Line "  $($process.Name) (process $($process.ProcessId))" }
@@ -242,10 +253,10 @@ try {
         else { Remove-ItemProperty -LiteralPath $AutostartRegistryKey -Name PrivateFlow; $removed.Add("Autostart value PrivateFlow in $AutostartRegistryKey") }
     }
     foreach ($leftover in $temporaryLeftovers) { if (Remove-Tree $leftover $temporaryFolder) { $removed.Add($leftover) } }
-    foreach ($folder in $leftoverCopies + @($programFolder, $dataFolder)) {
+    foreach ($folder in $leftoverCopies + @($programFolder, $dataFolder) + @($clipsFolder | Where-Object { $_ })) {
         if ($script:stopReason -or -not (Test-Path -LiteralPath $folder)) { continue }
         if ($problem = Get-FolderProblem) { $script:stopReason = $problem; break }
-        $folderRemoved = $(if ($folder -eq $dataFolder) { Remove-Tree $folder $folder } else { Remove-ProgramFolder $folder })
+        $folderRemoved = $(if ($folder -eq $dataFolder -or $folder -eq $clipsFolder) { Remove-Tree $folder $folder } else { Remove-ProgramFolder $folder })
         if ($folderRemoved) { $removed.Add($folder) }
     }
 } catch { $script:stopReason = "an unexpected error: $($_.Exception.Message)" }

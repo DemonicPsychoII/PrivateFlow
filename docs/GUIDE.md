@@ -176,7 +176,8 @@ at the end ("Best regards, Alex" / "Viele Grüße, Alex") move to their own line
 Use a profile to enable Spoken formatting only in your mail app. Use `spell A B C 1 end spelling` or
 `buchstabiere A B C 1 buchstabieren Ende` for identifiers. These compose text,
 including newlines, without sending Enter. Literal mode skips corrections,
-snippets and spoken commands; Exact skips the full processing pipeline.
+snippets and spoken commands, and Concise and Local polish give the Clean text
+in it; Exact skips the full processing pipeline.
 
 Profiles capture language, style, vocabulary, insertion and formatting options.
 A profile chosen in the tray or by its shortcut applies to the following
@@ -422,7 +423,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Autos
 ```
 
 The installer downloads and verifies the local speech engine and models on first
-install. You can also choose **Install recommended** under Settings → Models.
+install and says how much it downloads first: about 4.6 GB with an NVIDIA GPU
+(the CUDA engine, `large-v3-turbo` for dictation and `large-v3` for meetings),
+about 160 MB without. You can also choose **Install recommended** under Settings → Models.
 Windows x64 and PowerShell 5.1 or newer are required. The app runs locally after
 setup; model downloads need a network connection.
 
@@ -433,9 +436,9 @@ From a checkout, with .NET 10 SDK:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Autostart
 ```
 
-It installs to `%LOCALAPPDATA%\Programs\PrivateFlow`, adds a Start-menu shortcut,
-preserves settings/models, and removes the browser download mark. Autostart is
-opt-in. No code-signing certificate is included.
+It installs to `%LOCALAPPDATA%\Programs\PrivateFlow` and adds a Start-menu shortcut;
+a shortcut that opens another existing installation is kept. It preserves
+settings and models and removes the browser download mark. Autostart is opt-in. No code-signing certificate is included.
 
 ### Uninstall
 
@@ -450,10 +453,12 @@ It removes a default installation and nothing else: the program folder
 (`PrivateFlow.new-*`, `PrivateFlow.old-*`), the data folder
 `%LOCALAPPDATA%\PrivateFlow` with everything in it (settings, the cloud reader
 token, models and runtimes, downloads, **saved meetings with their transcripts,
-notes and audio**, and any file you put there yourself), the Start-menu shortcut
+notes and audio**, and any file you put there yourself), the dictations kept as
+test clips in `%USERPROFILE%\PrivateFlowEvaluation\dictation-clips` (their audio
+and corrected text; the folder above it stays), the Start-menu shortcut
 and the autostart entry when they start this installation, and the installer's
 and updater's leftovers in `%TEMP%`. First it lists each location with its size,
-the number of saved meetings and each model, then asks you to type `UNINSTALL`;
+the number of saved meetings and kept test clips and each model, then asks you to type `UNINSTALL`;
 anything else cancels. `-WhatIf` only lists. `-Force` skips the question and ends
 a running Private Flow, for unattended use. Deleted meetings cannot be recovered;
 export what you want to keep first.
@@ -490,10 +495,14 @@ latest release by hand with an existing installer:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 -FromRelease
 ```
 
-Each release needs `PrivateFlow-win-x64.zip` and `manifest.json`. The installer
-checks the ZIP size and SHA-256 against the manifest and GitHub's asset digest
-when present. Downloads and engine setup finish before the installed app is
-replaced. This checks integrity, not a publisher signature.
+Each release needs `PrivateFlow-win-x64.zip`, `manifest.json`, `SHA256SUMS`
+and `SHA256SUMS.sig`. The installer verifies `SHA256SUMS.sig` with the public
+release key it holds (`$taskReleaseKey`, ECDSA P-256), requires the ZIP and the
+manifest to match the signed `SHA256SUMS`, and checks the ZIP size and SHA-256
+against the manifest and GitHub's asset digest when present. A release without
+a valid signature is refused. Downloads and engine setup finish before the
+installed app is replaced. Private Flow's own files are not Authenticode-signed
+yet (see Smart App Control below).
 The installer refuses an equal or older release unless `-Force` is supplied;
 this also applies when `-FromCloud` falls back to releases. A missing public
 repository or stable release is explained explicitly (HTTP 404).
@@ -517,13 +526,23 @@ releases and prints a configuration notice. Older installs with only a token
 show a proactive app notice and tray notification with the command above to
 restore integration updates, keeping the stored token. Installed copies check
 two minutes after start and once a day; the tray offers updates between
-dictations. The public snapshot repository has Actions disabled; its release
-ZIP and manifest come from the internal build of the same tree.
+dictations. Update-server builds are checked by size and SHA-256 against the
+server's listing, not by the release key's signature, so use only a server you
+control.
+
+Public releases are built by the public repository's release workflow on
+GitHub's runners from the tagged sources: it builds and checks the snapshot,
+packages it, signs `SHA256SUMS` with the release key, which only the
+repository's release environment holds, and leaves a draft release that the
+owner publishes.
 
 To prepare a public source snapshot, run `scripts/export-public.ps1 -Target
 <empty folder> [-Commit <commit>]`. It exports the committed tree (HEAD by
-default) without history or workflows and rejects private-detail patterns or
-the internal runner label before reporting success.
+default) without history or the internal paths the commit lists, with the
+public release workflow as its only workflow,
+with the public counterparts of internal documents and without internal
+release notes, and rejects private-detail patterns, the internal runner label
+and the name of the development repository before reporting success.
 
 The API-based text features have no default endpoint. Set the API base URL,
 model and key environment-variable name under Settings → Text style to use
@@ -665,8 +684,10 @@ again or quit, instead of starting with the defaults.
 
 The build treats warnings as errors and runs the pure safety checks; the smoke
 tests use generated audio and isolated data folders and can run beside your own
-Private Flow. The diagnostic and evaluation modes run only with a
-`PRIVATE_FLOW_DATA_DIR` outside `%LOCALAPPDATA%\PrivateFlow`. What each check
+Private Flow. The diagnostic and evaluation modes are in a separate verification
+host, `PrivateFlow.Verification.exe`, which the build puts beside the package
+and not into it; they run only with a `PRIVATE_FLOW_DATA_DIR` outside
+`%LOCALAPPDATA%\PrivateFlow`. What each check
 covers is in [test coverage](TEST_COVERAGE.md); what is verified, what has
 been tried for real, what is not verified and the measured figures are in
 [validation](VALIDATION.md). CI cross-builds and packages Windows

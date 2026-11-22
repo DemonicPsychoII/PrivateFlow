@@ -22,7 +22,8 @@ internal static class DictationPipeline
         var clean = TextCleanup.RemoveFillers(prepared.Text);
         string? note = null;
         var result = clean;
-        if (settings.OutputStyle is OutputStyle.Concise or OutputStyle.LocalPolish && !string.IsNullOrWhiteSpace(clean))
+        // Literal mode keeps the words as spoken, so no rewrite applies the speaker's self-corrections to them.
+        if (settings.OutputStyle is OutputStyle.Concise or OutputStyle.LocalPolish && !settings.LiteralMode && !string.IsNullOrWhiteSpace(clean))
         {
             using var polish = CancellationTokenSource.CreateLinkedTokenSource(token, skipPolish);
             try

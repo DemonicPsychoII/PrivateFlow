@@ -1,10 +1,95 @@
-# Private Flow 0.5.5 — publication defaults and updates (2026-11-18)
+# Private Flow 0.5.22
+
+- **Cancelling a dictation no longer shows an error.** Escape, Cancel, Quit or a hold-to-talk tap during a recording showed the red card "The recording stopped with an error", because the cancel ended the speech recognition the way a failure does. It now says only that the dictation was cancelled, or released too soon.
+- **Literal mode keeps the words as spoken also with Concise and Local polish.** These styles rewrote the text anyway and applied spoken self-corrections. In Literal mode they now give the Clean text, without a request to the API or the local model.
+- **Spanish negations are protected in rewrites.** Concise and Local polish fall back to Clean when a rewrite drops "nunca", "jamás", "nadie", "nada", "ningún", "tampoco", "sin" or "ni", as they already did for English and German negations.
+- **A copy you make while Private Flow checks the field is kept.** A copy made after the dictation was put on the clipboard, while Private Flow read the focus right before Ctrl+V, could be pasted in place of the dictation. The dictation is now not pasted and your copy stays, with the card "Not pasted: the clipboard could not be saved". The same now holds for a copy made right after the dictation was put on the clipboard, which could be taken for the dictation, pasted and then replaced by the previous clipboard.
+- **The GPU is used when the CUDA runtime loads.** Private Flow decided GPU or processor by whether the engine's folder name contained "cuda"; it now decides by whether the CUDA backend actually loaded.
+- **Missing meeting audio is named.** When audio a meeting listed was gone at the final transcript and had no live preview either, the transcript was marked complete without a word about the gap. The notes now start with how many seconds of audio were missing.
+- **Setups no longer run over files in use.** Setting up Local polish or the meeting notes model keeps the local models stopped until its runtime is in place, with a Local polish dictation waiting meanwhile as it does for meeting notes, and is refused while a local model still writes, instead of failing partway when its files are locked. After an update that brings a new speech runtime, the recommended setup runs as Apply does: dictation and meetings wait for it, and with a dictation running it waits for the next start.
+- An update whose installer ends at once no longer leaves the window covered and Quit refused.
+
+# Private Flow 0.5.21 (beta): signed releases and safer updates (2026-11-20)
+
+- **Releases are signed.** Every public release now carries `SHA256SUMS.sig`, the Private Flow release key's signature of its `SHA256SUMS`. An update from a public release, in the app or with `install.ps1 -FromRelease`, refuses a release without a valid signature, or whose package or manifest differs from what the signed `SHA256SUMS` lists, before anything from it runs. The README's code signing policy says how to check a download by hand.
+- **An update is no longer cut short by a second start.** While an update installs, Quit in the tray is refused with "An update is installing. Private Flow restarts when it is done.", and starting Private Flow by hand shows the same and exits. Before, a copy started during the download could record a meeting until the installer stopped it, and the end of that meeting was lost.
+- **A paste goes only to the field that was checked.** Right before Ctrl+V, Private Flow now also compares the field itself, not only the window: in a browser, whose text and password fields share one window, a move from the checked field into a password field beside it means "Not pasted".
+- **A copy you make while Private Flow pastes is kept.** When you copy something while Private Flow saves the clipboard, or after that but before it puts the dictation there, the dictation is not pasted and your copy stays, with the card "Not pasted: the clipboard could not be saved".
+- A second installation or update started while one runs is refused with "Another installation of Private Flow is running" and changes nothing.
+- `install.ps1` refuses a `PRIVATE_FLOW_DATA_DIR` on a network share at once; the speech setup refused the paths it would write there later.
+
+# Private Flow 0.5.20 (beta): nothing internal in the public release (2026-11-19)
+
+- Release builds name no commit of the development repository: their build identity is "<version>+release", and the release manifest carries no commit, build time or tree state.
+- The in-app check for update-server builds reads the repository it compares builds in from `update-server.json`; `install.ps1 -SetCloudToken -SourceRepository <owner/name>` stores it. Without it, or in a release build, the newest server build is offered without the list of changes it brings.
+- **Updates never go back.** A server build with a lower version than the installed one is neither offered nor installed, also when it is the build you confirmed; a release build is offered only a higher version, and a development build the same version only from another commit.
+
+# Private Flow 0.5.19 (beta): safer pasting, updates and uninstall (2026-11-19)
+
+- **A field Private Flow cannot check is not pasted into.** Before pasting, Private Flow asks Windows whether the field in front is a password field. When the app in front could not say (no answer from its accessibility interface, and no answer from a classic Windows edit control), the dictation was pasted anyway. It is now left on the clipboard instead, with the card "Not pasted: could not check whether this is a password field"; press Ctrl+V where you want it. The same happens when the focus moves to another field while Private Flow asks, and Private Flow reads the focus once more right before it pastes: the text goes only to the field it checked. Apps whose fields answer are pasted into as before.
+- **Your clipboard is never lost.** When the clipboard could not be saved completely before a paste, because another program held it or one of its formats could not be read or had no data to read, the paste went ahead and the restore afterwards could empty the clipboard or drop part of it. Private Flow now leaves the clipboard as it is and keeps the text on the Dictate page, with the card "Not pasted: the clipboard could not be saved".
+- **A missing Visual C++ runtime is named.** On a fresh Windows the speech engine cannot load without the Microsoft Visual C++ Redistributable 2015-2022 (x64), and the first dictation failed with "Could not load ggml.dll". The installer, the speech setup in the app and that error now say what to install, with Microsoft's download address. Private Flow does not download it itself.
+- **An update waits for your work, and installs what it offered.** Update now refuses to start while a dictation, a meeting or a setup runs, and once it runs, the dictation and meeting shortcuts, Record and Start meeting refuse with a card until the restart, so the installer never stops Private Flow in the middle of a recording. Update first checks for the newest version and names the exact release or build in its question; when the check finds nothing or fails, it says so and starts nothing. The installer is told what you confirmed and refuses anything else it finds, such as a release published while the question was open.
+- **Uninstall removes your kept test clips.** `uninstall.ps1` now lists and deletes `%USERPROFILE%\PrivateFlowEvaluation\dictation-clips` (the dictations kept with Keep as test clips, audio and corrected text) with the rest, under the same confirmation, and refuses when that folder or the one above it is a link.
+- **Removing a model is one operation like the others.** While a model is being removed, the meeting shortcut, dictation, an update and Quit wait for it.
+- **The installer keeps an unreadable settings file.** `install.ps1` reads settings.json under the same lock as the app. When the file cannot be opened or read, it is left unchanged and the speech setup is skipped; Private Flow sets the file aside at its next start. What the speech setup hands back is checked as the app checks it, and refused with the reason when it is not.
+- **A speech worker that ends while loading says its exit code** again, instead of "exited unexpectedly".
+
+# Private Flow 0.5.18 (beta): release checks and private debug symbols (2026-11-19)
+
+- Releases now carry a `SHA256SUMS` file beside the ZIP and its manifest. `install.ps1 -FromRelease` and the in-app update check read it and refuse a release whose checksum file is malformed, larger than 64 KiB, repeats a name in any letter case, or disagrees with the manifest. Releases without one, such as 0.5.5, are checked as before.
+- `install.ps1` can require a signed inventory in a downloaded release, and in an extracted release ZIP it runs from: a file listing the path, size and SHA-256 of every file of the package, signed by one named publisher. The package must then hold exactly those files before anything from it runs. The check stays off until releases are signed, and builds from your own update server are never checked for a signature.
+- The debug symbols in the package no longer name the folder the app was built in or the development repository.
+- The release manifest is read with exact types: a value of the wrong type, such as a list where a text is expected, is refused.
+
+# Private Flow 0.5.17 (beta): a smaller download (2026-11-19)
+
+- The download is smaller: the verification, evaluation and diagnostic modes left the app. `PrivateFlow.exe` ends with exit code 2 when started with one of their switches, and `--transcribe-file` runs only with an isolated `PRIVATE_FLOW_DATA_DIR`.
+
+# Private Flow 0.5.16 (beta): the idle unload under test (2026-11-19)
+
+- No user-visible changes.
+
+# Private Flow 0.5.15 (beta): speech worker failures under test (2026-11-19)
+
+- No user-visible changes.
+
+# Private Flow 0.5.14 (beta): choices in tables read by name (2026-11-19)
+
+- Screen readers and other assistive tools now hear the language and style chosen in the Profiles per app and corrections tables by their names, such as "Spanish" or "Local polish", instead of "Named { Value = es, Label = Spanish }".
+
+# Private Flow 0.5.13 (beta): compressed audio files under test (2026-11-19)
+
+- No user-visible changes.
+
+# Private Flow 0.5.12 (beta): keep a dictation as a test clip (2026-11-19)
+
+- New, off unless you turn it on: Settings, Speech recognition, **Keep dictations as test clips**. While it is on, the last dictation's audio stays in memory until the next one, and **Keep as test clip** on Dictate saves it with the text as you corrected it to `%USERPROFILE%\PrivateFlowEvaluation\dictation-clips`, on this PC only. The automated tests can then play your own dictations; their reports count words and name the clip's folder, never its text. Dictations longer than ten minutes are not kept.
+
+# Private Flow 0.5.11 (beta): one install path for all models (2026-11-19)
+
+- During a dictation, the Install button of the meeting notes model under Models now waits like every other Install button there.
+
+# Private Flow 0.5.9 (beta): the Concise time limit under test (2026-11-19)
+
+- No user-visible changes.
+
+# Private Flow 0.5.7 (beta): a test build with recorded clips in place of the microphone (2026-11-19)
+
+- No user-visible changes.
+
+# Private Flow 0.5.6 (beta): installer shortcut and download size (2026-11-19)
+
+- **A second installation keeps your shortcut.** `install.ps1` with `-Destination` elsewhere, such as a test copy, pointed the Start-menu shortcut "Private Flow" at that copy, so the main installation no longer opened from the Start menu. A shortcut that opens another installation that still exists is now kept, and the installer names both paths. A missing shortcut, or one whose program is gone, is still created.
+- **The installer says how much it downloads.** It announced "~1.5 GB with an NVIDIA GPU" but downloaded about 4.6 GB, because Automatic on the GPU also installs `large-v3` for meetings. The setup now adds up what is missing from `scripts/models.json` and prints it before the first download ("Download size: 4.6 GB"). The README and the guide give the disk space with and without a GPU.
+
+# Private Flow 0.5.5 (beta): publication defaults and updates (2026-11-18)
 
 - Removed the private update server host and default API endpoint. Explicit saved API settings stay; older files with no endpoint key show a setup notice and use the existing visible local fallbacks.
 - Updates use the latest stable public GitHub release by default, anonymously and only when its version is higher. A stored update-server URL plus reader token selects integration builds instead. A legacy token alone falls back to releases with a proactive app notice and tray notification; the installer prints the same recovery command: `install.ps1 -SetCloudToken -CloudUrl "<server URL>" -CloudWakeUrl "<wake URL>"`. Run it once per Windows user and press Enter to retain the stored token.
 - Both installer download modes verify size and SHA-256 before replacing the app; releases also check the GitHub asset digest when present. Build manifests now include the ZIP size. Missing releases, offline checks and API failures produce no background offer.
 - The installer rejects equal or older releases, including an update-server fallback, unless `-Force` is given. A missing public repository or stable release (HTTP 404) gets an explanatory message.
-- Added the MIT licence, security reporting guidance, checked third-party notices and a tracked-text leak gate. Removed private infrastructure detail and obsolete planning documents. CI behaviour is unchanged; public snapshots use release assets from the internal build.
+- Added the MIT licence, security reporting guidance, checked third-party notices and a tracked-text leak gate. Removed private infrastructure detail and obsolete planning documents.
 - `scripts/export-public.ps1` exports a committed tree without history or workflows and scans it for private detail and the internal runner label. Non-ASCII PowerShell scripts retain UTF-8 BOMs for Windows PowerShell 5.1; the pure checks enforce this and exercise accented evaluation literals.
 
 # Private Flow 0.5.4 (beta): one explicit dictation state (2026-11-18)
@@ -14,7 +99,7 @@
 
 - Nothing changes for you. Inside, every stored setting is now described once, with the settings section that saves it and whether a setup installs it; showing, reading, discarding and the "Save your changes?" question follow from that one description, and the checks fail when a new setting is left out of it.
 
-# Private Flow 0.5.2 (beta): fixes from the council review of 0.5.1 (2026-11-18)
+# Private Flow 0.5.2 (beta): fixes from a review of 0.5.1 (2026-11-18)
 
 - **A setup no longer undoes saved preferences.** A setup that ran in the background (Apply, Set up Local polish, Install under Models, the meeting notes model, the recommended setup after an update) read settings.json at its start and wrote all of it back at its end, so a preference saved in between, such as turning automatic pasting off, was back after the next restart while Private Flow showed it as saved. Run by Private Flow, the setup scripts now never write settings.json: they hand back the paths they installed, and Private Flow stores exactly those like any other save. Run by hand, they change settings.json only while no Private Flow runs on that data folder, and while one runs they stop before downloading anything; `install.ps1`, and with it the in-app update, downloads first and stores the new paths only after it has stopped the running app. Every result a setup hands back is checked: only paths inside the data folder's own models and runtime folders, links resolved, are taken. They also no longer garble names with accents in settings.json under Windows PowerShell.
 - **A chosen profile no longer replaces your preferences.** A profile chosen in the tray or by its shortcut filled the language, text style, pasting and vocabulary on Dictate as unsaved changes, so Save preferences, or Enter on "Save your changes?" at Quit, stored the profile's vocabulary, often empty, over yours. A chosen profile now applies to the following dictations only, shown by a chip on Dictate ("Profile Code active ×", press it to end the profile); nothing becomes unsaved and Save never stores a profile's values.
@@ -46,7 +131,7 @@
 
 # Private Flow 0.5.0 (beta)
 
-The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af303e, all 29 steps passed with real keys and a real microphone), with the fixes he asked for after that test. Builds that fix things after this one are 0.5.1, 0.5.2 and so on: every pull request that changes the app raises the last number and adds its section under a new heading "Private Flow 0.5.n" above this one. Settings → About and updates names the version and the build with its commit.
+The first beta: the state of a manual test with real keys and a real microphone, with the fixes that test asked for. Builds that fix things after this one are 0.5.1, 0.5.2 and so on, each with its section under a new heading "Private Flow 0.5.n" above this one. Settings → About and updates names the version and the build.
 
 ## In this beta (2026-11-17)
 
@@ -54,7 +139,6 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - **The pill comes up at once.** A dictation press shows the pill before the microphone opens, with a grey outline and faint bars while it starts, and with the white outline and the moving wave once the microphone records, so starting is not mistaken for a silent recording; the meeting shortcut does the same with the meeting pill. It no longer fades in. The first press after start no longer waits for Windows and WPF to prepare UI Automation, which reads the field the dictation is for, and the pill's window: Private Flow prepares both out of sight right after it starts, without opening the microphone. The speech worker, a process of its own, now starts beside the recording instead of before the pill. Measured with a stand-in for the microphone: the first press drew the pill after 128 to 174 ms of work, then the microphone's own start, then a 160 ms fade-in; now after 25 ms, and later presses after 16 to 20 ms instead of 32 to 53 ms. The meeting pill: 17 ms instead of 141 to 144 ms at the first meeting. The field the dictation pastes into is still the one in front at the press; the pill never takes the focus. From the moment the pill shows, the start ends as a recording does: a second press, Escape, Cancel or Quit ends a starting dictation before the microphone opens, and releasing a hold-to-talk shortcut then is a tap ("Released too soon"); the meeting shortcut, Stop; finish later or Quit ends a starting meeting before its devices open, and no meeting is left behind. The window cannot be closed during a starting meeting, as while one records; preferences can be saved then, as during a recording (only a dictation or a file transcription locks saving).
 - **The AltGr card no longer nags.** A saved Ctrl + Alt shortcut whose key types a character with AltGr keeps its card under Shortcuts, but the card no longer takes the status line or puts a yellow dot on the settings button at every start. While a new combination waits in the field for Save preferences, the card is a warning as before.
 - **Local polish without its model says so where it is chosen.** With Local polish chosen on Dictate or under Text style and its model not set up, a card on the Dictate page says that such dictations use Clean and offers **Set up Local polish (2,497 MB)**, which opens Settings → Speech recognition and runs the setup there with its progress bar; the same card stands quietly under Text style, and under Profiles per app while a profile uses Local polish. The "Used Clean" card after a dictation now gives the reason, "Local polish is not set up on this PC.", with the same button. Nothing is downloaded before the button is pressed. Local polish and the meeting notes model stay two separate installs.
-
 
 ## New since 0.4.0
 
@@ -86,7 +170,7 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 
 ### A meeting notes model on this PC (2026-11-17)
 
-- An optional **meeting notes model**, Qwen3.5-4B (2.7 GB, Apache-2.0), with the GPU build of llama.cpp (about 3.4 GB together on a PC with an NVIDIA GPU), writes meeting notes on this PC in the local notes style; nothing is sent anywhere. On an RTX 4060 Laptop it wrote notes for a 30-minute meeting in 24 to 28 s and found every decision and 95 % of action items on invented test meetings; about one action in five has a wrong or missing due date, so check owners and dates against the cited rows. It is loaded only while notes are written and unloaded right after. It is installed on request with `scripts\setup-rewrite.ps1 -Part notes` (an install button in the app followed in "One interface"); the button to write notes is on the History page's Notes tab.
+- An optional **meeting notes model**, Qwen3.5-4B (2.7 GB, Apache-2.0), with the GPU build of llama.cpp (about 3.4 GB together on a PC with an NVIDIA GPU), writes meeting notes on this PC in the local notes style; nothing is sent anywhere. On an 8 GB NVIDIA GPU it wrote notes for a 30-minute meeting in 24 to 28 s and found every decision and 95 % of action items on invented test meetings; about one action in five has a wrong or missing due date, so check owners and dates against the cited rows. It is loaded only while notes are written and unloaded right after. It is installed on request with `scripts\setup-rewrite.ps1 -Part notes` (an install button in the app followed in "One interface"); the button to write notes is on the History page's Notes tab.
 - Meetings of up to about 80 minutes fit the notes model, instead of about 20 minutes before.
 - Notes written on this PC no longer use the Local polish paths (`LocalRewriteModelPath`); they use the meeting notes model. The model that Local polish installs is still refused for notes, now also under another file name.
 - Model-written notes are in the language most of the meeting was held in, which the app now names to the model.
@@ -97,8 +181,8 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - **History** lists past meetings on the left (title, date, length, an "unfinished" tag with the reason) and shows the selected one on the right with the tabs **Transcript** and **Notes**, **Export** and a menu with **Re-transcribe** and **Delete meeting**. Speaker labels and text stay editable in place with **Save edits**. The meeting recording now is listed but cannot be opened; other meetings stay readable while one records.
 - One search box in the History header searches all meetings with the same word and time matching as before. The list shows only the meetings with hits and their counts, the transcript highlights the hit rows and opens at the first with its neighbouring rows, and **Only this meeting** limits the search to the selected meeting. The separate Find evidence box is gone.
 - The **Notes** tab shows the rule-based notes at once with their notice in yellow and a link to the new **Meeting notes** choice under Settings → Meeting defaults (Rules on this PC, Local model, API; each says what leaves the PC). With Local model or API, a button for the selected meeting names where the text goes and writes notes only when pressed, with progress and Cancel; a failure keeps the rule-based notes with the reason in yellow. Written notes are stored with the meeting with the model and the time, used by the Markdown export, and **Back to rule-based notes** discards them.
-- Defaults saved under Settings → Meeting defaults while an older meeting is being finished now become the Meetings page's choices when the pass ends; a choice changed on the page before stays (#51).
-- The Meetings page chips announce their current choice to screen readers, such as "Meeting languages: English only" (#50).
+- Defaults saved under Settings → Meeting defaults while an older meeting is being finished now become the Meetings page's choices when the pass ends; a choice changed on the page before stays.
+- The Meetings page chips announce their current choice to screen readers, such as "Meeting languages: English only".
 
 ### Meeting shortcut and a mirrored wave for both channels (2026-11-16)
 
@@ -111,7 +195,6 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - **Shortcut behavior** sits next to the shortcut (then on the General page, today under Settings → Shortcuts). **Toggle** stays the default and works as before: press once to record, again to transcribe. **Hold to talk** records while you hold the shortcut and transcribes and pastes into the field selected at the start when you release it. A press that captured less than about 0.3 s of audio is discarded without transcribing or pasting. Escape still cancels, also while the shortcut's modifiers are held. Profile shortcuts follow the same setting.
 - Settings saved before this version keep Toggle.
 
-
 ### Names, finding times, echo and meeting goals (2026-11-15)
 
 - The meeting final pass uses the names and terms Private Flow already has: the dictation **Vocabulary**, the replacement side of short **Corrections** and the meeting **Title** are added to the meeting's own Vocabulary as hints for Whisper (superseded on 2026-11-17: meetings use the one shared Vocabulary page). The transcript itself is not rewritten: names, corrections and numbers stay as recognized.
@@ -122,12 +205,11 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - While the final pass runs after Stop, **Stop; process later** or **Cancel** (both **Cancel finishing** since 2026-11-16) ends it; the meeting keeps its live preview and its audio for Re-transcribe, and a new meeting can start.
 - Engine or model paths typed on the Speech engine page (today Settings → Speech recognition) now also apply to meetings instead of the setup's large-v3; a meeting model that times out falls back to the speech model.
 - The evaluation and diagnostic modes refuse to run on Private Flow's own data folder.
-- Meeting quality is now judged on goals (docs/VALIDATION.md): the final pass against the per-utterance ceiling (met on real speech; not met on the synthetic sets, mainly in the shared system-channel layout), every recognized time and number findable (met, 100 %), names and critical items with the user's vocabulary (not met, 85.8 %), real speech as a floor (met, 97.5 % words, 93.7 % items), and the spoken times found by search and notes (met with the show on the system channel, 90.4 %; not met in the shared system-channel layout, where two people and the show share the system channel and are not separated, 36.5 %). The owner set aside a goal for his own recorded meeting.
-
+- Meeting quality is now judged on goals (docs/VALIDATION.md): the final pass against the per-utterance ceiling (met on real speech; not met on the synthetic sets, mainly in the shared system-channel layout), every recognized time and number findable (met, 100 %), names and critical items with the user's vocabulary (not met, 85.8 %), real speech as a floor (met, 97.5 % words, 93.7 % items), and the spoken times found by search and notes (met with the show on the system channel, 90.4 %; not met in the shared system-channel layout, where two people and the show share the system channel and are not separated, 36.5 %).
 
 ### Meeting final pass and better language handling (2026-11-15)
 
-- **Stop and finish** now runs a final pass over the saved audio and replaces the live transcript, which is a preview while recording. It cuts at pauses, writes each stretch of speech in the most likely of the meeting's languages and decodes neighbouring stretches in one language together. On the evaluation suite, meeting word recall rose from 90.8 % to 94.9 % (synthetic), 87.2 % to 95.2 % (English/Spanish show discussion) and 64.4 % to 97.1 % (real speech). The finalizing state shows its progress; a 10-minute meeting takes about 1.5 minutes per recorded channel on the RTX 4060 Laptop.
+- **Stop and finish** now runs a final pass over the saved audio and replaces the live transcript, which is a preview while recording. It cuts at pauses, writes each stretch of speech in the most likely of the meeting's languages and decodes neighbouring stretches in one language together. On the evaluation suite, meeting word recall rose from 90.8 % to 94.9 % (synthetic), 87.2 % to 95.2 % (English/Spanish show discussion) and 64.4 % to 97.1 % (real speech). The finalizing state shows its progress; a 10-minute meeting takes about 1.5 minutes per recorded channel on an 8 GB NVIDIA GPU.
 - The Meetings page has **Languages** (English, German and Spanish by default, or a pair, or one fixed language) and **Vocabulary** for names and terms. Both are kept for the next meeting. (Superseded on 2026-11-17: the languages are a chip with defaults under Settings → Meeting defaults, and meetings use the shared Vocabulary page.)
 - Audio stays until the final transcript is saved, then it is deleted unless **Retain processed audio** is on. **Re-transcribe** (formerly Retry transcription) runs the final pass again, for example with other languages or a vocabulary; it replaces the transcript, including edits.
 - Show audio that the microphone hears from the loudspeakers is dropped when the system channel says the same words at the same time (narrowed the same day to rows at least 10 dB quieter than the person, see the entry above).
@@ -135,32 +217,28 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - Automatic language detection in dictation, files and meetings only chooses among English, German and Spanish; quiet speech is no longer written in Welsh. Recognition windows are cut in a pause instead of every 20 s, so a word is no longer split between two windows. Dictation latency rose by about 0.04 s.
 - **Transcribe file** uses the meeting final pass.
 
-
 ### Speech engine selectors (2026-11-12)
 
 - The Speech engine page (today Settings → Speech recognition) has **Runs on** (Automatic, GPU, CPU) and **Model** (Automatic, large-v3-turbo, medium, base) with **Apply**, which downloads what is missing and switches.
 - Automatic follows the recommended setup. After each update Private Flow reapplies it once in the background and notifies when the model changed. Specific choices and hand-typed paths are kept. The update dialog no longer asks about the speech engine.
 - Existing installs whose paths setup wrote count as Automatic, so the next update moves NVIDIA PCs from medium to large-v3-turbo. A setup Automatic would not pick, such as the CPU engine on an NVIDIA PC, stays an explicit choice.
 
-
 ### Integration builds from the update server (2026-11-07)
 
-- CI builds pull requests, pushes to `main` and manual runs; a feature branch push no longer builds twice. The SDK comes from the CI image instead of `actions/setup-dotnet`. Pull request builds upload nothing. `main` and manual builds upload `private-flow-build-<attempt>` (`manifest.json` and `PrivateFlow-win-x64.zip`, uncompressed, one day) for publication to the update server. Before, every build kept a 70 MB artifact for 14 days.
 - `install.ps1 -FromCloud` replaces `-FromCI`: it wakes the update server, fetches the newest `integration` build (or `-CloudChannel`), and installs it only after its size and SHA-256 match the cloud listing. `install.ps1 -SetCloudToken` stores this PC's reader token DPAPI-encrypted in `%LOCALAPPDATA%\PrivateFlow\cloud-reader.token`.
 - The in-app update check and **Update** use the same cloud build. The GitHub CLI is now optional: when signed in, it still lists the merged pull requests. Installed copies from before this change need one manual `install.ps1 -FromCloud`.
 
-
 ## Changed since 0.4.0
 
-### Manual test 1: one save rule for Settings, Ctrl + Alt shortcuts (2026-11-17)
+### One save rule for Settings, Ctrl + Alt shortcuts (2026-11-17)
 
 - **One rule for every setting.** A changed value that is not stored yet shows **Unsaved changes** with **Discard** and **Save preferences** in the header and the dot on the settings button the moment it changes, in every section of Settings and with the chips on Dictate and Meetings. Before, only the dictation preferences did: Profiles per app, Meeting defaults (languages, retained audio, retention days, notes style) and the speech detection, keep-warm switches and model paths under Speech recognition each had their own Save button and showed nothing while unsaved, and the system audio colour was stored at once. **Save profiles**, **Save meeting settings** and **Save speech recognition settings** are gone; Save preferences stores everything, and Discard undoes everything. A system audio colour applies to the pill and the page wave once saved. Install, Apply, Set up Local polish, Run check, Export, Update, Quit and Delete stay immediate. Runs on and Model under Speech recognition are what Apply sets up; a choice there that differs from the setup in use now shows a note card, "Not applied yet". The next dictation uses the values shown, saved or not, as before.
-- **Leaving with unsaved changes asks.** Closing Settings (close button or Escape), a page opened from outside it, such as by a review-first dictation or the tray, and Quit ask **Save your changes?** in the window, naming the sections, for example "Your changes under Language and pasting and Meeting defaults are not saved yet." **Save**, blue at the bottom right, has the focus and is pressed by Enter; it stores and goes on. **Don't save**, red text at the bottom left, discards and goes on. Escape goes back with the changes still pending. Before, closing Settings kept unsaved changes silently and Quit dropped them. When something cannot be saved, for example 0 retention days or a shortcut another app uses, Settings stays open at that section and says why on an error card there ("Preferences not saved", or "Dictation shortcut unchanged" for a shortcut); a save whose file write fails says "Nothing was saved, so nothing changed". Discard or the next successful save ends the card. Hiding the window to the tray keeps unsaved changes as before. Quit still drops unsaved transcript edits on History (#57). **Update** asks about the update first and about unsaved changes only once it will really run; until Private Flow restarts a notice covers the window, so nothing can be changed that the restart would drop; Quit still works over it. An update that ends without restarting leaves a warning card under About and updates.
+- **Leaving with unsaved changes asks.** Closing Settings (close button or Escape), a page opened from outside it, such as by a review-first dictation or the tray, and Quit ask **Save your changes?** in the window, naming the sections, for example "Your changes under Language and pasting and Meeting defaults are not saved yet." **Save**, blue at the bottom right, has the focus and is pressed by Enter; it stores and goes on. **Don't save**, red text at the bottom left, discards and goes on. Escape goes back with the changes still pending. Before, closing Settings kept unsaved changes silently and Quit dropped them. When something cannot be saved, for example 0 retention days or a shortcut another app uses, Settings stays open at that section and says why on an error card there ("Preferences not saved", or "Dictation shortcut unchanged" for a shortcut); a save whose file write fails says "Nothing was saved, so nothing changed". Discard or the next successful save ends the card. Hiding the window to the tray keeps unsaved changes as before. Quit still drops unsaved transcript edits on History. **Update** asks about the update first and about unsaved changes only once it will really run; until Private Flow restarts a notice covers the window, so nothing can be changed that the restart would drop; Quit still works over it. An update that ends without restarting leaves a warning card under About and updates.
 - **Saving no longer shares a temporary file with the setup scripts.** Each save writes its own uniquely named file next to settings.json and renames it over it; a setup script's settings.json.partial is never touched, and a file a crash left behind is removed at the next start.
 - **Learn correction** on the Vocabulary page gives the correction the language of the dictation it came from again, as before this change, also when that language was chosen on Dictate but not saved; before the first dictation it takes the stored language.
 - **Unsaved values never act.** Everything that runs (dictation, meetings, Delete expired meetings, Write notes, setup) uses only stored preferences, except that a dictation uses the choices shown for itself. Before, a dictation or a profile chosen in the tray copied unsaved values into the running preferences, so a meeting start or Save corrections and snippets stored them, and a Save whose file write failed left its values in effect after Discard: Delete expired meetings could delete meetings under a retention you never saved. Now a Save takes effect only once settings.json is written, and a failed one changes nothing. A meeting start stores only its own audio and language choices as the new defaults and leaves unsaved meeting defaults in Settings as they are.
 - **Refused shortcuts from earlier versions** (Alt + F4, Win + L, Ctrl + Alt + Delete) are cleared at start, also on profiles, and named once on a warning card under Shortcuts, which the status line points to, and in a tray notice, for example "Alt + F4 was removed from the profile “Code”: …". A Save blocked by a profile's shortcut names the profile.
-- **Ctrl + Alt shortcuts** such as Ctrl + Alt + M are accepted. Windows takes AltGr as Ctrl + Alt, so when the key types a character with AltGr on the keyboard layout in use, a warning card under Shortcuts (or Profiles per app) says so, and you can still save it: "Ctrl + Alt + M also is AltGr + M, which types µ on this keyboard; while Private Flow runs, that character cannot be typed with it." Where AltGr types nothing with the key (Ctrl + Alt + A, Ctrl + Alt + Space on German), there is no warning. Before, every Ctrl + Alt + letter, digit or punctuation key was rejected; this replaces that rejection in "Manual test 1: hold to talk, shortcut fields …" below. Still rejected, with the reason: plain keys without Ctrl, Alt or Win except function keys, Shift with a typing key, Escape, Tab and Enter, and Ctrl + Alt + Delete, Win + L and Alt + F4. A shortcut another app uses or Windows reserves is named under its field when saving.
+- **Ctrl + Alt shortcuts** such as Ctrl + Alt + M are accepted. Windows takes AltGr as Ctrl + Alt, so when the key types a character with AltGr on the keyboard layout in use, a warning card under Shortcuts (or Profiles per app) says so, and you can still save it: "Ctrl + Alt + M also is AltGr + M, which types µ on this keyboard; while Private Flow runs, that character cannot be typed with it." Where AltGr types nothing with the key (Ctrl + Alt + A, Ctrl + Alt + Space on German), there is no warning. Before, every Ctrl + Alt + letter, digit or punctuation key was rejected; this replaces that rejection in "Hold to talk, shortcut fields …" below. Still rejected, with the reason: plain keys without Ctrl, Alt or Win except function keys, Shift with a typing key, Escape, Tab and Enter, and Ctrl + Alt + Delete, Win + L and Alt + F4. A shortcut another app uses or Windows reserves is named under its field when saving.
 
 ### One interface (2026-11-17)
 
@@ -175,10 +253,10 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - Model notes list at most 20 times mentioned and say "Times mentioned stop at 20; the transcript may name more." when the list reached that cap.
 - A final pass waiting for GPU memory tries one last load after the wait, tries every 10 s instead of every 3 s while the meeting notes hold the GPU, and updates its step text when the notes end.
 - A dictation whose speech model loads into too little free GPU memory says so in the status line while that load lasts ("GPU memory is low (…), so the speech model loads slowly").
-- History (#53): a search that leaves out the shown meeting no longer switches away from it while it has unsaved row edits; it stays shown and the status line says why. Clearing the search also clears **Only this meeting**. The API notes button names host and port ("notes.example:8443") when the port is not the scheme's default. The Notes tab removes only the header of the rule-based notes and keeps a line before it about a silent channel. **Re-transcribe** asks before it replaces unsaved edits, and a cancelled or failed Re-transcribe keeps them shown and unsaved with a notice.
-- Notes built by rules (#47): a short acceptance, with or without a date ("Sure, by Friday.", "Ja, bis Freitag.", "Sí, para el viernes.", "Gerne.", "On it."), keeps the action item, with the date as its due date. A short reply that says something else is still no acceptance.
-- Hold to talk (#39): after a failed microphone start in Hold to talk, Escape during a later file transcription no longer cancels it. The documentation now says what the 0.3 s threshold measures: a press that captured less than about 0.3 s of audio is discarded.
-- Meeting wave (#42): the wave redraws only while a bar moves, and the page wave stops while the Meetings page is not shown.
+- History: a search that leaves out the shown meeting no longer switches away from it while it has unsaved row edits; it stays shown and the status line says why. Clearing the search also clears **Only this meeting**. The API notes button names host and port ("notes.example:8443") when the port is not the scheme's default. The Notes tab removes only the header of the rule-based notes and keeps a line before it about a silent channel. **Re-transcribe** asks before it replaces unsaved edits, and a cancelled or failed Re-transcribe keeps them shown and unsaved with a notice.
+- Notes built by rules: a short acceptance, with or without a date ("Sure, by Friday.", "Ja, bis Freitag.", "Sí, para el viernes.", "Gerne.", "On it."), keeps the action item, with the date as its due date. A short reply that says something else is still no acceptance.
+- Hold to talk: after a failed microphone start in Hold to talk, Escape during a later file transcription no longer cancels it. The documentation now says what the 0.3 s threshold measures: a press that captured less than about 0.3 s of audio is discarded.
+- Meeting wave: the wave redraws only while a bar moves, and the page wave stops while the Meetings page is not shown.
 - Consistent wording:
   - About and updates → Privacy, the Concise API connection description and the Speech recognition status say that transcript text goes to the API only with the Concise style, or for one meeting when you press its button with the API notes style.
   - Dictation languages read Automatic, English, German and Spanish everywhere, also in the Profiles per app and Vocabulary tables, which no longer show codes. The Profiles style column shows "Local polish" instead of "LocalPolish"; profile shortcuts show as "Ctrl + Alt + P" or "Not set".
@@ -197,7 +275,6 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - Any failure of the meeting model, also one while waiting for memory, gets one more try with a fresh worker before the speech model takes over. A model that is still loading slowly is given up only after 60 s without any progress or after 3 minutes.
 - When the speech model finishes a meeting instead of the meeting model, the final message, the tray notification and the top of the meeting's notes say so and why, and the meeting record keeps which model produced the transcript. Transcribe file says it in its final message. The progress bar continues from where it stood instead of dropping to zero.
 - Recognition is unchanged: same models, beam size, prompts and language choice, and identical transcripts on the same audio.
-
 
 ### A Meetings page like Dictate, settings titles that say what is set, and a meeting output device (2026-11-17)
 
@@ -218,12 +295,11 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - Speech setup on PCs with an NVIDIA GPU now installs Whisper large-v3-turbo (8-bit, 874 MB) instead of medium (1.5 GB). On generated speech it transcribes about twice as fast, loads in about half the time and made about as many errors as medium (6 against 5 of 114 words). The CPU setup keeps base.
 - Existing installs keep their model. To switch, answer Yes to the engine question when updating, or use **Set up speech** on the Speech engine page. (Superseded the same day by the speech engine selectors above: Automatic installs follow the recommendation after an update, and **Apply** under Settings → Speech recognition switches by hand.) After switching, `models\ggml-medium.bin` (1.5 GB) is unused and can be deleted.
 
-
 ## Fixed since 0.4.0
 
-### Manual test 1: hold to talk, shortcut fields, install progress, notes (2026-11-17)
+### Hold to talk, shortcut fields, install progress, notes (2026-11-17)
 
-- **Hold to talk** should no longer flicker, pending the owner's retest with real keys. Holding the shortcut kept starting and discarding recordings, so the pill flickered and nothing was transcribed: Windows sent the shortcut's hotkey message again while the keys were still held, and each repeat was taken as a release, which discarded the short recording, and then as a new press, which started the next one. Now a hotkey message for the shortcut that started a running hold-to-talk recording is ignored while that shortcut's keys are down at that moment; the recording goes on until the release, as before. A hold that captured under 0.3 s of audio is still discarded, and the bounded wait for the modifiers before the paste is unchanged. Toggle, Escape, the meeting shortcut and profile shortcuts in toggle mode behave as before. If an app run as administrator is in front, Windows may not let Private Flow read the keys, and hold to talk still discards at once.
+- **Hold to talk** should no longer flicker, not yet retested with real keys. Holding the shortcut kept starting and discarding recordings, so the pill flickered and nothing was transcribed: Windows sent the shortcut's hotkey message again while the keys were still held, and each repeat was taken as a release, which discarded the short recording, and then as a new press, which started the next one. Now a hotkey message for the shortcut that started a running hold-to-talk recording is ignored while that shortcut's keys are down at that moment; the recording goes on until the release, as before. A hold that captured under 0.3 s of audio is still discarded, and the bounded wait for the modifiers before the paste is unchanged. Toggle, Escape, the meeting shortcut and profile shortcuts in toggle mode behave as before. If an app run as administrator is in front, Windows may not let Private Flow read the keys, and hold to talk still discards at once.
 - **Shortcut fields** under Settings → Shortcuts react to every key. Pressing Ctrl, Alt, Shift or Win shows "Ctrl + Alt + … Keep holding and press the last key of the combination." A rejected combination is named, with the reason, for example "Ctrl + Alt + M: Ctrl + Alt with a letter, digit or punctuation key types a character with AltGr on keyboards such as German, so it is reserved. Use Ctrl + Shift, Ctrl + Alt + Space, Win, or a function key." Before, every rejection, including a single modifier key, showed one general grey text that looked much like the field's description. The profile shortcut field works the same way.
 - A shortcut that Private Flow has registered, pressed in a shortcut field, reaches Private Flow as that shortcut and not as keys of the field. Before, nothing happened. Now the field says what it is: "Ctrl + Alt + Space is the current dictation shortcut.", or that it is already the meeting shortcut or a profile's shortcut. In the profile shortcut field it no longer starts a dictation.
 - While a dictation or a file transcription runs, the shortcut fields lose their field look and the Shortcuts section says "Locked while a dictation or a file transcription runs. The shortcuts can be changed once it has finished." Before, the locked fields looked almost like enabled ones and ignored clicks.
@@ -233,7 +309,7 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - **One yellow line at most** on the Notes tab. The caveat of the rule-based notes is shorter: "Built by rules on this PC without a model: a rough draft that misses most decisions and open questions." It keeps the link to the notes setting. A failure, a failed install of the notes model, or a transcript changed since the notes were written takes its place, each as a short line with the full text in its tooltip. Notes written for an older transcript say so first in every state, for example "The transcript changed since these notes were written; writing them again failed: …". A cancelled run is a neutral line. The status line no longer repeats the reason; it points to the Notes tab.
 - The diagnostic instance takes a saved dictation shortcut as if it had registered it, so the Dictate page shows the new key caps there too.
 
-### Council round 2: Escape after the wait, notes kept (2026-11-17)
+### Escape after the wait, notes kept (2026-11-17)
 
 - A **Local polish** dictation that waited for meeting notes takes Escape back as soon as the wait ends, when its polish starts or is skipped for the time limit, until the paste is done; in Hold to talk, Escape with the shortcut's modifiers held works again too. Before, from the end of the wait to the paste, only Cancel in the window could stop a paste that came long after speaking. Escape or Cancel while the polish runs after the wait keeps the Clean text on the Dictate page, pastes nothing and leaves the clipboard untouched, as Cancel during the wait does. During the wait itself Escape stays with the other programs.
 - The status line and tray say what a queued dictation is doing: "waits for the meeting notes" only during the wait, then "Polishing the dictation that waited for the meeting notes", each with how to keep the Clean text.
@@ -241,20 +317,20 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - **Write notes** with unsaved transcript edits asks first, in the window, whether to save them and write the notes from the saved transcript; Cancel neither saves nor sends anything. Before, it saved the edits without asking.
 - The progress line of notes written by the local model no longer only says "You can keep using Private Flow": it adds that a Local polish dictation waits for the notes and locks the page meanwhile, and that Cancel on the Dictate page keeps that dictation's Clean text and unlocks the page. Every dictation locks the Meetings and History pages until it is done, so the notes' Cancel cannot be reached during that wait.
 - A notes request that starts while Private Flow quits fails with "The local model was stopped." instead of an internal error text.
-- Correction to round 1 below: Quit during the wait pastes nothing and leaves the clipboard untouched; the app then closes, and the recognized text is not kept.
+- Correction to "Notes kept, queued dictations kept, fewer false items" below: Quit during the wait pastes nothing and leaves the clipboard untouched; the app then closes, and the recognized text is not kept.
 
-### Council round 1: notes kept, queued dictations kept, fewer false items (2026-11-17)
+### Notes kept, queued dictations kept, fewer false items (2026-11-17)
 
 - **Finish transcripts** no longer saves an unfinished meeting over notes that are being written for it. While notes are written for one of the unfinished meetings it does nothing and the status line says which meeting and to wait for the notes or cancel them; Re-transcribe and Delete meeting already did so. Write notes still waits while a transcript is finished, and notes written before a pass stay with the meeting.
 - A **Local polish** dictation that waits for meeting notes on this PC no longer holds Escape for the whole wait: once its speech is recognized, Escape goes back to the other programs, so pressing it there neither reaches Private Flow nor cancels the dictation. **Cancel** on the Dictate page during the wait now keeps the recognized text: it shows the Clean text on the Dictate page with "Used Clean: the polish was cancelled.", pastes nothing and leaves the clipboard alone. Quit during the wait pastes nothing and leaves the clipboard alone; the app closes, so the text is not kept. Before, one Escape anywhere during the wait discarded the text. This replaces "Escape cancels it at once" of "A meeting notes model on this PC".
 - Notes built by rules no longer list a bare acceptance such as "Will do." or "Mach ich." as an action item without a task when the row before it is not recognized as a request ("Call me back at 1230 about the invoice."). A commitment that names its task is still listed.
-- "At 12 15 percent were ready" no longer lists the time 12:15 in the notes: two-digit minutes followed by a unit or count word are a quantity, as single digits already were (#48). "At 12 15", "12 15 pm" and "at 12 15 we meet" are still 12:15. Search is unchanged.
+- "At 12 15 percent were ready" no longer lists the time 12:15 in the notes: two-digit minutes followed by a unit or count word are a quantity, as single digits already were. "At 12 15", "12 15 pm" and "at 12 15 we meet" are still 12:15. Search is unchanged.
 - Numbers and dates in the interface follow English, not the region format of Windows: "3.4 GB" and "42%" instead of "3,4 GB" and "42 %". This replaces "Sizes use the system's number format everywhere" of "One interface".
 - The Notes tab says once who wrote model notes: the line above them names the model and the time, and the notes text on the tab no longer repeats "Written by the model …". Stored and exported notes keep it.
 - Cancelling the install of the meeting notes model removes only that install's partial downloads, not partial downloads of the speech setup or of a Local polish setup.
 - Writing notes with the local model stops a warm Local polish server and the notes server off the interface thread, so the window no longer freezes for up to 10 s while a server exits.
 
-### A time followed by a quantity is not a time (2026-11-17, #48)
+### A time followed by a quantity is not a time (2026-11-17)
 
 - "Monday at 9:00, one hour" lists only 9:00 in the notes, no longer also 9:01, and a search for 9:01 no longer finds it; the same in German and Spanish. Punctuation between an hour and a number ends the time, a single-digit number followed by a unit or count word (hours, minutes, percent, euros, people; Stunden, Prozent; horas, por ciento, personas, and more) is a quantity, and nothing after a time that has its minutes adds minutes ("at 9 15 30 of us" is 9:15).
 - "At twelve five", "12 oh 5", "doce y cinco", "zwölf Uhr fünf" and "12.05 Uhr" are still 12:05. No longer read as 12:05: "at twelve, five" with a transcribed pause and "las doce y cinco minutos".
@@ -269,7 +345,6 @@ The first internal beta: the state tested by hand on 2026-11-17 (build 0.4.0+5af
 - With **Retain processed audio** off, audio stays on disk only for a meeting that is not finished, and the page says how much. Audio that an earlier run left in finished meetings is deleted at start. A chunk whose write completed just before a crash is recovered.
 - A microphone that delivers no sound for 10 seconds is shown on the Meetings page while it lasts and announced once per meeting in the tray. The recording indicator and the meeting record name the microphone and the playback device; when a channel stayed silent for the whole meeting, the final message and the notes say so.
 - Transcribe file shows its progress as a percentage that also moves while speech and languages are detected.
-
 
 # Private Flow 0.4.0
 
@@ -349,19 +424,17 @@ explicit API Concise sends transcript text (since 2026-11-16 also the API notes
 style, for one meeting when its button is pressed). Application matching cannot opt in.
 
 The synthetic and isolated checks are recorded in VALIDATION.md. Real device,
-loopback and cross-app trials remain owner-initiated. This release does not claim
+loopback and cross-app trials remain manual. This release does not claim
 automatic remote-speaker diarization or generated semantic archive answers.
 
 # Livelier recording pill and update prompt (2026-10-09)
 
 - The recording pill now shows how loud you are speaking, measured every 25 ms on a decibel scale. The newest level appears in the middle bars and moves outward over about a quarter second. Pauses between words show as dips; loud and quiet syllables differ. Before, a single peak value scaled a rolling sine pattern, and normal speech filled it to the top. With reduced motion, the bars follow the current level in place. The transcribing wave is unchanged.
-- (Superseded on 2026-11-07: the check reads the update server, and the GitHub CLI is optional.) Installed copies check for a newer successful main build shortly after start and every six hours through the signed-in GitHub CLI. When main has commits this copy lacks, a tray notification (shown between dictations, once per build) offers the update. **Update** and the tray menu then read "Update available"; the dialog lists the merged pull requests before installing. The check only reads build and commit data from GitHub; without gh, a network or sign-in, it stays silent.
-
+- (Superseded on 2026-11-07: the check reads the update server, and the GitHub CLI is optional.) Installed copies check for a newer build shortly after start and every six hours. When there is one, a tray notification (shown between dictations, once per build) offers the update. **Update** and the tray menu then read "Update available"; the dialog lists the merged pull requests before installing. The check only reads build and commit data from GitHub; without gh, a network or sign-in, it stays silent.
 
 # Recording duration fix (2026-10-06)
 
 - Removed the timer's automatic stop at three minutes. Recording continues until you press the shortcut again, click Stop, cancel or quit. Audio remains local and buffered in RAM; the separate five-minute transcription timeout remains.
-
 
 # Private Flow v0.4.0 (prepared)
 
@@ -373,7 +446,6 @@ automatic remote-speaker diarization or generated semantic archive answers.
 - Spoken "quote … end quote" becomes quotation marks in Clean and Concise, so Concise no longer pulls the following sentence into a quote. Whisper's segment line breaks no longer split pasted text mid-paragraph.
 
 Verified locally: zero-warning build, 158 safety/preference checks, medium CUDA plus vocabulary on synthetic speech, live Concise correction cases through the configured API.
-
 
 # Private Flow v0.3.0 (prepared)
 
@@ -387,7 +459,6 @@ Verified locally: zero-warning build, 158 safety/preference checks, medium CUDA 
 
 Verified locally: zero-warning build, 100 safety/preference checks, isolated cross-process paste check (plain field, rich document field, refused password field, clipboard restored), UI smoke test, real-engine synthetic speech, live Concise rewrite through the configured API.
 
-
 # Private Flow v0.2.0
 
 - Press the shortcut once to start recording, again to transcribe; holding keys is unnecessary. Configure the combination in Recording shortcut and Save preferences. Conflicts preserve the previous working binding.
@@ -395,8 +466,7 @@ Verified locally: zero-warning build, 100 safety/preference checks, isolated cro
 - Automatic insertion is enabled by default, with one migration of legacy settings. Later saved opt-outs persist. Existing focus/password/cancellation safeguards continue to route unsafe targets to preview.
 - Close and minimize hide to the tray. Quit stops the app.
 
-Verified locally: zero-warning Windows build, 40 safety/preference checks, isolated UI defaults/Quit, synthetic recording/processing animation and focus retention. CI packaging is pending. Real microphone and cross-app insertion remain on the manual validation matrix.
-
+Verified locally: zero-warning Windows build, 40 safety/preference checks, isolated UI defaults/Quit, synthetic recording/processing animation and focus retention. Real microphone and cross-app insertion remain on the manual validation matrix.
 
 # Private Flow v0.1.0
 

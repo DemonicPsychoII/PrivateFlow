@@ -1,7 +1,6 @@
 # Full feature implementation
 
 Implementation of fourteen feature opportunities was requested on 2026-10-13.
-The source baseline is f735c680523accbd0a98ff49ec129b25910157eb.
 
 ## Scope and architecture
 
@@ -60,8 +59,8 @@ remain owner-initiated; report any unverified behavior plainly.
 
 - All fourteen opportunities have an implemented workflow. Version 0.4.0 adds
   the workspace UI, native worker, pinned VAD/local polish setup and local archive.
-- Version 0.5.0 (2026-11-17) is the first internal beta; builds after it are
-  0.5.n, one number per pull request that changes the app (RELEASE_NOTES.md).
+- Version 0.5.0 (2026-11-17) is the first beta; builds after it are 0.5.n, one
+  number for each change to the shipped app (RELEASE_NOTES.md).
 - 200 behavior/preference checks pass. Real synthetic speech verifies CPU and
   CUDA transcription, silence rejection, warm reuse, cancellation, long files,
   meeting recovery, speaker persistence and local polish. See VALIDATION.md.
@@ -70,5 +69,5 @@ remain owner-initiated; report any unverified behavior plainly.
   and automatic server backups remain future extensions; they are not required
   for these evidence-based workflows.
 - Live microphone/device events, loopback timing and actual shortcut/insertion
-  trials remain owner-initiated. No owner's microphone or existing app received
-  test input. Independent review covers the final PR head before merge.
+  trials remain manual. No real microphone or existing app received test
+  input.
