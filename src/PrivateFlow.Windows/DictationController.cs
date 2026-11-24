@@ -29,6 +29,8 @@ internal interface IDictationView
     void OpenPage(string title);
     // Runs the setup of Local polish where its progress shows.
     void SetUpLocalPolish();
+    // How often the window's timer ticks in the dictation's new state (DictationTable.TimerInterval).
+    void SetTimerInterval(TimeSpan interval);
 }
 
 internal sealed class DictationController(Settings settings, MicrophoneDevices devices, GlobalShortcuts shortcuts, TrayIcon tray, IDictationView view, Dispatcher dispatcher)
@@ -84,6 +86,7 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
     {
         var step = DictationTable.Next(state, happened, new(stale, heldShortcut is not null, TimeSpan.FromSeconds(recorder?.Seconds ?? 0)));
         state = step.Next;
+        view.SetTimerInterval(DictationTable.TimerInterval(state));
         var actions = step.Actions;
         if (actions.HasFlag(DictationActions.CancelSession)) { policy.Cancel(); cancellation?.Cancel(); }
         if (actions.HasFlag(DictationActions.KeepClean)) skipPolish?.Cancel();
@@ -314,10 +317,15 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
             // shortcut, is released; a paste with Ctrl/Alt still held would become a different shortcut in the target.
             for (var retry = 0; retry < 50 && Native.ModifiersDown; retry++)
                 await Task.Delay(20, token);
+            // The window the dictation started in is pasted into only while it is still in front by itself: the pill never takes the
+            // foreground, so another window in front is one the user switched to, and bringing the old one back would take it away.
             var selected = policy.Target;
-            if (DictationTable.RestoresForeground(insertion)) Native.RestoreForeground(selected.Window);
-            bool StillValid(FocusTarget current) => policy.IsCurrent(operation) && !token.IsCancellationRequested &&
-                policy.CanInsert(operation, current, Native.ModifiersDown, final);
+            var keysHeld = false;
+            bool StillValid(FocusTarget current)
+            {
+                keysHeld = Native.ModifiersDown;
+                return policy.IsCurrent(operation) && !token.IsCancellationRequested && policy.CanInsert(operation, current, keysHeld, final);
+            }
             var pasted = StillValid(Native.CaptureTarget()) ? await Native.PasteAsync(final, StillValid, PasteTiming.RestoreDelay(ProcessName(selected.Process))) : InsertionResult.Unavailable;
             var seconds = $"{watch.Elapsed.TotalSeconds:0.0}s";
             if (pasted == InsertionResult.Complete) { view.ShowStatus($"Pasted • {seconds}"); return; }
@@ -325,7 +333,7 @@ internal sealed class DictationController(Settings settings, MicrophoneDevices d
             // user may have copied something else since, or the clipboard could not be saved for the paste.
             var clipboardUnreadable = pasted == InsertionResult.ClipboardUnreadable;
             var copied = DictationTable.CopiesWhenNotPasted(insertion, clipboardUnreadable) && Native.SetClipboardText(final);
-            var reason = DictationPolicy.NotPastedReason(selected, Native.CaptureTarget(), clipboardUnreadable);
+            var reason = DictationPolicy.NotPastedReason(selected, Native.CaptureTarget(), clipboardUnreadable, keysHeld);
             view.ShowStatus(copied ? $"Copied • press Ctrl+V • {seconds}" : "Ready");
             Report(NotPastedKey, NoticeKind.Warning, "Not pasted: " + reason, copied ? "The text is on the clipboard; press Ctrl+V where you want it." : "Use Copy text to take it from the Dictate page.");
             tray.ShowBalloon(2500, "Private Flow", copied ? "Copied — press Ctrl+V to paste." : "Open Private Flow to copy your text.", Forms.ToolTipIcon.None);

@@ -89,15 +89,20 @@ public sealed class DictationPolicy
     public static bool SameElement(FocusTarget classified, FocusTarget now, string? nowElement) =>
         SameFocus(classified, now) && classified.AccessibleId == nowElement;
 
-    // Why a dictation was not pasted, for its notice: selected is the target read at the start, now the one read after the attempt.
-    public static string NotPastedReason(FocusTarget selected, FocusTarget now, bool clipboardUnreadable)
+    // Why a dictation was not pasted, for its notice: selected is the target read at the start, now the one read after the attempt,
+    // keysHeld whether Ctrl, Alt, Shift or Windows was still down at the last check before Ctrl+V.
+    public static string NotPastedReason(FocusTarget selected, FocusTarget now, bool clipboardUnreadable, bool keysHeld = false)
     {
         var same = now.Window == selected.Window;
         if (clipboardUnreadable) return "the clipboard could not be saved";
         if (selected.Window == 0) return "no window was in front at the start";
         if (selected.OwnWindow || selected.Password == PasswordField.Yes || (same && (now.OwnWindow || now.Password == PasswordField.Yes))) return "password field or Private Flow itself";
         if (selected.Password == PasswordField.Unknown || (same && now.Password == PasswordField.Unknown)) return "could not check whether this is a password field";
-        return same ? "Windows blocked the paste" : "the selected window is no longer in front";
+        if (keysHeld) return "Ctrl, Alt, Shift or Windows was still held";
+        if (!same) return "the selected window is no longer in front";
+        // The same window: the focus may have moved between its fields while Private Flow checked them right before Ctrl+V, which the
+        // targets read at the start and after the attempt cannot tell from a paste Windows refused.
+        return "the focus moved or Windows blocked the paste";
     }
 }
 

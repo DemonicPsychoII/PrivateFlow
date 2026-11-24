@@ -11,9 +11,10 @@ internal enum SpeechOperation { Transcribe, DetectLanguage, SpeechProbabilities 
 internal sealed record SpeechRequest(string Language, string Vocabulary, string VadPath, bool DetectSpeech, string Languages = "", int BeamSize = 0,
     SpeechOperation Operation = SpeechOperation.Transcribe, bool ResetSpeechState = false);
 // Memory is the GPU memory when the model did not fit the free memory: with an error the worker refused or failed the load, without
-// one it loaded anyway. Loading marks the message a worker sends before such a load, ahead of the one that says it is ready.
+// one it loaded anyway. Loading marks the message a worker sends before such a load, ahead of the one that says it is ready; OnGpu in
+// that ready message says the model runs on the GPU.
 internal sealed record WorkerReply(SpeechResult? Result, string? Error, Dictionary<string, double>? LanguageProbabilities = null, float[]? SpeechProbabilities = null,
-    GpuMemory? Memory = null, bool Loading = false);
+    GpuMemory? Memory = null, bool Loading = false, bool OnGpu = false);
 // A model the worker did not load because the GPU memory it needs is held by other work; loading it anyway would move it to
 // system memory, where recognition runs many times slower.
 internal sealed class GpuMemoryException(string message, GpuMemory memory) : InvalidOperationException(message)
@@ -28,6 +29,9 @@ internal sealed class SpeechWorker : IDisposable
     private NamedPipeServerStream? pipe;
     private Process? process;
     private string? engine, model;
+    // What the request limit depends on besides the audio (SpeechRuntime.SpeechRequestLimit), from the loaded model and its worker.
+    private long modelBytes;
+    private bool onGpu;
     // When the model was last used, for the five-minute idle unload; --verify-worker-faults moves it by hand.
     internal TimeProvider Clock { get; set; } = TimeProvider.System;
     private DateTimeOffset lastUse = DateTimeOffset.UtcNow;
@@ -36,6 +40,10 @@ internal sealed class SpeechWorker : IDisposable
     // Set by a final pass for its loads: it can wait for GPU memory or finish with a smaller model, so a model that does not fit the
     // free memory is refused. Other loads, such as dictation's, go ahead with a warning.
     internal static bool FinalPassLoads { get => finalPass.Value; set => finalPass.Value = value; }
+    private static readonly AsyncLocal<bool> otherModelLeft = new();
+    // Set by a final pass for an attempt that another model can still finish, so its requests get the shorter limit
+    // (SpeechRuntime.SpeechRequestLimit); every other request keeps five minutes.
+    internal static bool OtherModelLeft { get => otherModelLeft.Value; set => otherModelLeft.Value = value; }
     // The GPU memory when the loaded model did not fit the free memory and loaded anyway; null otherwise.
     public GpuMemory? LowMemory { get; private set; }
     public bool IsWarm => process is { HasExited: false };
@@ -45,14 +53,14 @@ internal sealed class SpeechWorker : IDisposable
         ?? throw new InvalidOperationException("Speech worker failed.");
     public async Task<WorkerReply> RequestAsync(float[] samples, Settings settings, SpeechRequest request, CancellationToken cancellation)
     {
-        // The worker stops reading a longer message, which would leave this side writing until the five-minute timeout.
+        // The worker stops reading a longer message, which would leave this side writing until the request's time limit.
         if (samples.Length > MaximumSamples) throw new InvalidOperationException("Invalid speech chunk length.");
         await gate.WaitAsync(cancellation);
         try
         {
             await EnsureStartedAsync(settings, cancellation);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-            timeout.CancelAfter(TimeSpan.FromMinutes(5));
+            timeout.CancelAfter(SpeechRuntime.SpeechRequestLimit(samples.Length / (double)SpeechSegmentation.SampleRate, modelBytes, onGpu, OtherModelLeft));
             await PipeProtocol.WriteJsonAsync(pipe!, request, timeout.Token);
             var bytes = new byte[samples.Length * sizeof(float)];
             Buffer.BlockCopy(samples, 0, bytes, 0, bytes.Length);
@@ -89,6 +97,7 @@ internal sealed class SpeechWorker : IDisposable
         // The stopped worker's GPU memory is free only once it has ended.
         await exited;
         if (!File.Exists(settings.EnginePath) || !File.Exists(settings.ModelPath)) throw new InvalidOperationException("Run speech setup first.");
+        var bytes = new FileInfo(settings.ModelPath).Length;
         var name = "PrivateFlow-speech-" + Guid.NewGuid().ToString("N");
         var connection = pipe = new(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true,
@@ -97,14 +106,15 @@ internal sealed class SpeechWorker : IDisposable
         var started = process = Process.Start(start) ?? throw new InvalidOperationException("Could not start the speech worker.");
         HelperProcessJob.Attach(started);
         _ = DrainAsync(started.StandardOutput); _ = DrainAsync(started.StandardError);
-        LowMemory = await WaitUntilLoadedAsync(started, connection, memory => loadingWithLowMemory?.Invoke(memory), cancellation);
+        var ready = await WaitUntilLoadedAsync(started, connection, memory => loadingWithLowMemory?.Invoke(memory), cancellation);
+        LowMemory = ready.Memory; onGpu = ready.OnGpu; modelBytes = bytes;
         engine = settings.EnginePath; model = settings.ModelPath;
     }
     internal const string RefuseShort = "refuse-short-memory", WarnShort = "warn-short-memory";
     // A worker that ends has failed. One that still uses processor time or reads its model is still loading, which can take far longer
     // than its usual seconds when another program takes GPU memory after the worker checked it; a worker without any progress for
     // StalledLimit has hung, and one still loading after LoadingLimit is given up.
-    private static async Task<GpuMemory?> WaitUntilLoadedAsync(Process worker, NamedPipeServerStream connection, Action<GpuMemory> loadingWithLowMemory, CancellationToken cancellation)
+    private static async Task<WorkerReply> WaitUntilLoadedAsync(Process worker, NamedPipeServerStream connection, Action<GpuMemory> loadingWithLowMemory, CancellationToken cancellation)
     {
         using var abandon = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         var ready = ReadyAsync(connection, loadingWithLowMemory, abandon.Token);
@@ -139,7 +149,7 @@ internal sealed class SpeechWorker : IDisposable
         try { await worker.WaitForExitAsync(wait.Token); return true; }
         catch (OperationCanceledException) { return worker.HasExited; }
     }
-    private static async Task<GpuMemory?> ReadyAsync(NamedPipeServerStream connection, Action<GpuMemory> loadingWithLowMemory, CancellationToken cancellation)
+    private static async Task<WorkerReply> ReadyAsync(NamedPipeServerStream connection, Action<GpuMemory> loadingWithLowMemory, CancellationToken cancellation)
     {
         await connection.WaitForConnectionAsync(cancellation);
         var ready = await PipeProtocol.ReadJsonAsync<WorkerReply>(connection, cancellation);
@@ -149,7 +159,7 @@ internal sealed class SpeechWorker : IDisposable
             ready = await PipeProtocol.ReadJsonAsync<WorkerReply>(connection, cancellation);
         }
         if (ready.Error is not null) throw ready.Memory is { } memory ? new GpuMemoryException(ready.Error, memory) : new InvalidOperationException(ready.Error);
-        return ready.Memory;
+        return ready;
     }
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(2), StalledLimit = TimeSpan.FromSeconds(60), LoadingLimit = TimeSpan.FromMinutes(3);
     // Processor time plus bytes read and written: either moves while a model is read from disk and copied to the GPU.
@@ -231,7 +241,7 @@ internal sealed class SpeechWorker : IDisposable
             // The constructor loads the model; the message before it lets a dictation say why the load is slow while it lasts.
             using var speech = new NativeSpeech(engine, model, memoryMode == RefuseShort,
                 low => PipeProtocol.WriteJsonAsync(connection, new WorkerReply(null, null, Memory: low, Loading: true), CancellationToken.None).GetAwaiter().GetResult());
-            await PipeProtocol.WriteJsonAsync(connection, new WorkerReply(null, null, Memory: speech.LowMemory), CancellationToken.None);
+            await PipeProtocol.WriteJsonAsync(connection, new WorkerReply(null, null, Memory: speech.LowMemory, OnGpu: speech.OnGpu), CancellationToken.None);
             while (connection.IsConnected)
             {
                 var request = await PipeProtocol.ReadJsonAsync<SpeechRequest>(connection, CancellationToken.None);

@@ -77,6 +77,19 @@ static class UpdateChecks
         foreach (var status in new[] { HttpStatusCode.NotFound, HttpStatusCode.Forbidden, HttpStatusCode.TooManyRequests, HttpStatusCode.InternalServerError })
             Check(await Find(Release(), status: status) is null, $"HTTP {(int)status} silently offers nothing");
         Check(await Find(Release(), offline: true) is null, "an offline PC silently offers nothing");
+        // The manual update check says "up to date" only when the latest release was read and is not newer, and otherwise that the check failed.
+        async Task<ReleaseLookup> Lookup(string release, HttpStatusCode status = HttpStatusCode.OK, bool offline = false, Version? installed = null)
+        {
+            using var handler = new FakeHttp(release, Manifest(), status, offline, null);
+            using var client = new HttpClient(handler);
+            return await ReleaseUpdate.LookupAsync(client, installed ?? new Version(0, 5, 5, 0), CancellationToken.None);
+        }
+        Check(await Lookup(Release(), installed: new Version(0, 5, 6, 0)) is { Package: null, UpToDate: true } && await Lookup(Release(), installed: new Version(0, 6, 0, 0)) is { Package: null, UpToDate: true }
+            && await Lookup(Release()) is { Package: not null, UpToDate: false },
+            "an equal or older latest release is up to date; a newer one is offered");
+        Check(await Lookup(Release(), offline: true) is { Package: null, UpToDate: false } && await Lookup(Release(), status: HttpStatusCode.Forbidden) is { Package: null, UpToDate: false }
+            && await Lookup("{") is { Package: null, UpToDate: false } && await Lookup(Release(tag: "v0.5.6-beta")) is { Package: null, UpToDate: false },
+            "an offline PC, a refused request, malformed metadata or an invalid tag is a failed check, not up to date");
         using var cancelledClient = new HttpClient(new FakeHttp(Release(), Manifest()));
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
         Check(await ReleaseUpdate.FindAsync(cancelledClient, new Version(0, 5, 5), cancelled.Token) is null, "cancelled checks silently offer nothing");

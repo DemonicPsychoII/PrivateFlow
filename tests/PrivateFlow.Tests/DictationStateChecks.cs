@@ -100,9 +100,9 @@ static class DictationStateChecks
             && DictationTable.Insertion(false, " ", true, false) == DictationInsertion.NothingRecognized && DictationTable.Insertion(false, "text", false, true) == DictationInsertion.Review,
             "a skipped polish keeps the text on the Dictate page before anything else; empty text and review-first insert nothing");
         var waited = DictationTable.Insertion(false, "text", true, true); var direct = DictationTable.Insertion(false, "text", true, false);
-        Check(waited == DictationInsertion.PasteAfterWait && direct == DictationInsertion.Paste && !DictationTable.RestoresForeground(waited) && !DictationTable.CopiesWhenNotPasted(waited)
-            && DictationTable.RestoresForeground(direct) && DictationTable.CopiesWhenNotPasted(direct) && !DictationTable.CopiesWhenNotPasted(DictationInsertion.KeepClean),
-            "a dictation that waited for the notes is not brought back to its window and leaves the clipboard alone; one that did not wait is restored and copied as before");
+        Check(waited == DictationInsertion.PasteAfterWait && direct == DictationInsertion.Paste && !DictationTable.CopiesWhenNotPasted(waited)
+            && DictationTable.CopiesWhenNotPasted(direct) && !DictationTable.CopiesWhenNotPasted(DictationInsertion.KeepClean),
+            "a dictation that waited for the notes leaves the clipboard alone when it is not pasted; one that did not wait is copied as before");
         Check(!DictationTable.CopiesWhenNotPasted(direct, clipboardUnreadable: true) && DictationTable.CopiesWhenNotPasted(direct, clipboardUnreadable: false),
             "a clipboard the paste could not save is not replaced by the copy either");
         // The test build pastes only in the disposable test VM, a diagnostic instance never; review-first and empty text stay as they are.
@@ -110,9 +110,9 @@ static class DictationStateChecks
             && !DictationTable.PasteAllowed(testBuild: true, diagnostic: false, inTestVm: false) && !DictationTable.PasteAllowed(testBuild: false, diagnostic: true, inTestVm: true),
             "the app pastes; the test build only in the test VM; a diagnostic instance never");
         var refused = DictationTable.Insertion(false, "text", true, false, pasteAllowed: false);
-        Check(refused == DictationInsertion.PasteRefused && !DictationTable.RestoresForeground(refused) && !DictationTable.CopiesWhenNotPasted(refused)
+        Check(refused == DictationInsertion.PasteRefused && !DictationTable.CopiesWhenNotPasted(refused)
             && DictationTable.Insertion(false, "text", false, false, pasteAllowed: false) == DictationInsertion.Review && DictationTable.Insertion(false, " ", true, false, pasteAllowed: false) == DictationInsertion.NothingRecognized,
-            "where pasting is refused the text stays on the Dictate page: nothing is pasted, brought to the front or copied");
+            "where pasting is refused the text stays on the Dictate page: nothing is pasted or copied");
 
         // The one state: what is recording, busy and idle, and how everything ends.
         Check(States.Count(state => DictationTable.IsRecording(state) || DictationTable.IsBusy(state)) == States.Length - 1 && !DictationTable.IsRecording(Idle) && !DictationTable.IsBusy(Idle)
@@ -122,5 +122,11 @@ static class DictationStateChecks
             "every busy dictation ends idle with its Escape, pill and controls released; a file or a new dictation begins only from Idle");
         Check(Next(Idle, Press) == new DictationStep(Idle, Start) && Next(Idle, Cancel) == new DictationStep(Idle, CancelSession | SayCancelled),
             "a press when idle runs the start's checks; Cancel or Quit when idle cancels nothing pending and says so");
+
+        // The window's timer: every 50 ms while it draws the recording and processing state and reads the keys of a hold, every 2 s otherwise.
+        Check(States.Where(state => state != Idle).All(state => DictationTable.TimerInterval(state) == TimeSpan.FromMilliseconds(50))
+            && States.Where(DictationTable.ReadsHeldKeys).All(state => DictationTable.TimerInterval(state) == TimeSpan.FromMilliseconds(50))
+            && DictationTable.TimerInterval(Idle) == TimeSpan.FromSeconds(2),
+            "the window's timer ticks every 50 ms in every state but Idle, so in every state that reads the held keys, and every 2 s while idle");
     }
 }

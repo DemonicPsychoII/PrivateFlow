@@ -10,7 +10,7 @@ using PrivateFlow.Windows;
 
 namespace PrivateFlow.Verification;
 
-internal static class WorkspaceVerification
+internal static partial class WorkspaceVerification
 {
     public static async Task RunAsync(string output)
     {
@@ -22,6 +22,7 @@ internal static class WorkspaceVerification
             var settings = Settings.Load();
             Check($"{0.42:P0} · {SpeechRuntime.Gigabytes(3_400_000_000)} GB · {12345:N0} · {new DateTime(2026, 11, 17):d MMM}" == "42% · 3.4 GB · 12,345 · 17 Nov",
                 "numbers and dates in the English interface do not follow the region format of Windows");
+            await VerifyPolishServerStopsAsync(output, Check);
             var health = await HealthChecks.SyntheticAsync(settings, CancellationToken.None); Check(health.Contains("passed"), "cold/warm synthetic ASR and VAD");
             var silence = await WhisperEngine.TranscribeChunkAsync(new float[32000], settings, CancellationToken.None);
             Check(silence.Segments.Count == 0, "Silero rejects generated silence");
@@ -638,9 +639,9 @@ internal static class WorkspaceVerification
                 await beginning;
                 Click("Stop and finish");
                 var recordingEntries = meetingList.Items.OfType<System.Windows.Controls.ListBoxItem>().Where(item => !item.IsEnabled).ToArray();
-                Check(recordingEntries.Length == 1 && Named(recordingEntries[0]).Contains("Recording now") && meetingList.IsEnabled
+                Check(recordingEntries.Length == 1 && Named(recordingEntries[0]).Contains("Recording now") && !Named(recordingEntries[0]).Contains("ended unexpectedly") && meetingList.IsEnabled
                     && !Descendants(host).OfType<System.Windows.Controls.Button>().Single(button => Named(button) == "More meeting actions").IsEnabled,
-                    "the meeting recording now is listed on the History page but cannot be selected; other meetings stay readable while their actions wait");
+                    "the meeting recording now is listed on the History page, named without a crash reason, but cannot be selected; other meetings stay readable while their actions wait");
                 Check(panel.IsCapturing && panel.PlaybackWarning is null && !Chip("Meeting microphone").IsEnabled && !Chip("Meeting languages").IsEnabled && !meetingTitle.IsEnabled,
                     $"a double click on Start meeting does not also stop it; while recording, the title and the chips are disabled and a meeting on the Windows default output shows no notice (capturing {panel.IsCapturing}, notice {panel.PlaybackWarning ?? "none"}, last status {messages.LastOrDefault()})");
                 var recording = new DispatcherWatchdog(); var buttonPeaks = new WavePeaks(pageWave);
@@ -874,6 +875,9 @@ internal static class WorkspaceVerification
             // as starting, before the microphone opens, and leaves the foreground where it was. A synthetic source stands in for the microphone;
             // the dictation is cancelled before anything could be pasted. Twice: the first and a later press of this instance.
             var pressTimes = new List<string>();
+            // The window's timer ticks every 50 ms only while a dictation runs, and every 2 s while idle (DictationTable.TimerInterval).
+            var windowTimer = (System.Windows.Threading.DispatcherTimer)typeof(MainWindow).GetField("timer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(main)!;
+            var timerIntervals = new List<double> { windowTimer.Interval.TotalMilliseconds };
             for (var press = 1; press <= 2; press++)
             {
                 var foreground = Native.GetForegroundWindow();
@@ -892,12 +896,16 @@ internal static class WorkspaceVerification
                 await Task.Delay(300);
                 if (recordingPill is not null) Capture(recordingPill, Path.Combine(output, press == 1 ? "pill-recording.png" : "pill-recording-silent.png"));
                 var listening = recordingPill is { Starting: false } && System.Windows.Automation.AutomationProperties.GetName(recordingPill) == "Private Flow recording" && main.Dictation.IsRecording;
+                timerIntervals.Add(windowTimer.Interval.TotalMilliseconds);
                 await main.Dictation.CancelAsync();
+                timerIntervals.Add(windowTimer.Interval.TotalMilliseconds);
                 var closed = !System.Windows.Application.Current.Windows.OfType<RecordingHud>().Any(window => window.IsVisible) && !main.Dictation.IsRecording;
                 pressTimes.Add($"press {press}: pill drawn {pillAt:0} ms, recording {recordingAt:0} ms");
                 Check(pillBeforeMicrophone && foregroundKept && listening && closed && pillAt > 0 && pillAt < PressToPillBound * 1000 && recordingAt >= pillAt,
                     $"a dictation press shows the pill within {PressToPillBound * 1000:0} ms, dimmed as starting before the microphone opens and without taking the foreground, then as recording; cancelled, it closes ({string.Join("; ", pressTimes)})");
             }
+            Check(timerIntervals.SequenceEqual([2000, 50, 2000, 50, 2000]),
+                $"the window's timer ticks every 2 s while idle, every 50 ms while a dictation records, and every 2 s again once it is cancelled ({string.Join(", ", timerIntervals)} ms)");
             T Element<T>(string name) where T : class => (T)main.FindName(name);
             void SavePreferencesInWindow() => Element<System.Windows.Controls.Button>("SavePreferencesButton").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
             // A starting dictation ends as a recording does (review of #67): each event is sent while the microphone open is held back, from

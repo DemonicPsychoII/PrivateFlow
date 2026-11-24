@@ -28,6 +28,8 @@ internal static class Program
         }
         // As in the app: an English interface whose numbers and dates do not follow the region format of Windows.
         System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+        // The workspace verification's stand-in llama-server, which the app starts with llama-server's arguments.
+        if (WorkspaceVerification.IsPolishServerStandIn(arguments)) return Settings.IsolatedRoot ? WorkspaceVerification.RunPolishServerStandIn(arguments) : 2;
         var host = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         host.Resources = new ResourceDictionary { Source = new Uri("/PrivateFlow;component/Theme.xaml", UriKind.Relative) };
         host.Startup += (_, _) => { if (!Start(host, arguments)) host.Shutdown(2); };

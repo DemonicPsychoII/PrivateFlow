@@ -62,11 +62,14 @@ public static partial class SpokenCorrections
         if (string.Equals(m.Groups["old"].Value, m.Groups["new"].Value, StringComparison.OrdinalIgnoreCase)) return m.Value;
         if (m.Groups["day"].Success && Weekdays.Contains(m.Groups["old"].Value) != Weekdays.Contains(m.Groups["new"].Value)) return m.Value;
         // "actually" is also an ordinary adverb; accept it only when the new value ends the clause.
+        // The full stop of "4:30 p.m." also ends the clause or sentence, unless the sentence goes on
+        // in lowercase ("Actually, 4 p.m. works better").
         var end = m.Index + m.Length;
-        if (m.Groups["cue"].Value.Equals("actually", StringComparison.OrdinalIgnoreCase) && !ClauseEnd().IsMatch(text, end)) return m.Value;
+        var valueEnd = m.Value.EndsWith('.') && !LowercaseAfter().IsMatch(text, end) ? end - 1 : end;
+        if (m.Groups["cue"].Value.Equals("actually", StringComparison.OrdinalIgnoreCase) && !ClauseEnd().IsMatch(text, valueEnd)) return m.Value;
         // Whisper often ends the sentence before the cue ("Tuesday. Sorry, I meant Wednesday.").
         // Across a full stop the repair must end its sentence: only then is it a bare replacement.
-        if (m.Groups["stop"].Success && !SentenceEnd().IsMatch(text, end)) return m.Value;
+        if (m.Groups["stop"].Success && !SentenceEnd().IsMatch(text, valueEnd)) return m.Value;
         // A path may hold spaces and any words ("C:/draft Vendor B, no wait, Vendor C final/a.txt").
         // Path detection is bounded, so a correction between path separators in one sentence is
         // left alone, however far apart they are; the sentence boundaries stay untouched.
@@ -98,18 +101,29 @@ public static partial class SpokenCorrections
         @"(?:moment|warte),?\s+nein|nein,?\s+ich\s+mein(?:e|te)?|(?:Entschuldigung|sorry),?\s+ich\s+meinte|ich\s+mein(?:e|te)|Korrektur)(?>\s*),?(?>\s*)" +
         @"|(?>\s*),(?>\s*)(?:(?:uh|um|äh|ähm),?\s+)?(?<cue>no|nein|nee)(?>\s*),(?>\s*))";
     private const string Start = @"(?<![\p{L}\p{N}_/\\.:\-])(?<pre>(?<w>\p{L}+)(?>\s+))?";
+    // A value ends at a word boundary.
     private const string End = @"(?![\p{L}\p{N}_/\\]|\.[\p{L}\p{N}])";
-    private const string Number = @"[+\-−]?\d+(?:[.,:]\d+)*";
+    // A number or label value also ends before a hyphenated compound: after a hyphen (also U+2010, the non-breaking U+2011 or an en
+    // dash) only a plain number or a single capital may follow, as in the range "4-6" or "Room 4-A"; "4-wheel", "4-1/2-inch", "4-20-mA"
+    // and the file name "4-6.pdf" are no repair. Weekdays keep their compounds ("Tuesday-Thursday").
+    private const string NumberEnd = @"(?![\p{L}\p{N}_/\\]|[\-\u2010\u2011\u2013](?!(?>\d+(?:[.,:]\d+)*)(?![\p{L}\p{N}_/\\\-\u2010\u2011\u2013]|\.[\p{L}\p{N}])|(?-i:\p{Lu})(?![\p{L}\p{N}_/\\\-\u2010\u2011\u2013]|\.[\p{L}\p{N}]))|\.[\p{L}\p{N}])";
+    // A weekday or month keeps a capitalized compound ("Tuesday-Thursday", "Dienstag-Nachmittag"), not a lowercase word or a file name
+    // ("Tuesday-report", "Tuesday-Report2.pdf").
+    private const string CalendarEnd = End + @"(?![\-\u2010\u2011\u2013](?:(?-i:\p{Ll})|[\p{L}\p{N}_\-\u2010\u2011\u2013]+\.[\p{L}\p{N}]))";
+    // Atomic: a value the end refuses ("4,5-mm") is not retried as a shorter one ("4" before ",5-mm").
+    private const string Number = @"(?>[+\-−]?\d+(?:[.,:]\d+)*)";
     // A bound per search; Apply then pastes the text without corrections.
     private const int TimeoutMs = 1000;
 
     // "at 3 pm, no wait, 4 pm", "um 15 Uhr, nein, um 16 Uhr": the unit must repeat, and a new
-    // value without one must not be followed by a word that could be a unit.
+    // value without one must not be followed by a word that could be a unit, except after a time
+    // with minutes after a colon ("at 3, no wait, 4:30 pm", which matched before the number became atomic);
+    // "bei 20, nein, 50 am Tag" and "2.50 am Tag" stay as spoken.
     [GeneratedRegex(Start + "(?<old>" + Number + @")(?:(?>\s*)(?<unit>[ap]\.m\.|\p{L}{1,16}))?" + Cue +
-        @"(?:\k<w>\s+)?(?<repair>(?<new>" + Number + @")(?(unit)(?>\s*)\k<unit>|(?!\s*\p{L})))" + End, RegexOptions.IgnoreCase, TimeoutMs)]
+        @"(?:\k<w>\s+)?(?<repair>(?<new>" + Number + @")(?(unit)(?>\s*)\k<unit>|(?:(?!\s*\p{L})|(?<=:\d{2})(?>\s*)(?:[ap]\.m\.|[ap]m|Uhr)(?![\p{L}\p{N}_/\\\-\u2010\u2011\u2013]|\.[\p{L}\p{N}]))))" + NumberEnd, RegexOptions.IgnoreCase, TimeoutMs)]
     private static partial Regex Quantity();
 
-    [GeneratedRegex(Start + "(?<day>)(?<old>" + CalendarName + ")" + Cue + @"(?:\k<w>\s+)?(?<repair>(?<new>" + CalendarName + "))" + End, RegexOptions.IgnoreCase, TimeoutMs)]
+    [GeneratedRegex(Start + "(?<day>)(?<old>" + CalendarName + ")" + Cue + @"(?:\k<w>\s+)?(?<repair>(?<new>" + CalendarName + "))" + CalendarEnd, RegexOptions.IgnoreCase, TimeoutMs)]
     private static partial Regex Calendar();
     // Names are capitalized; "may" as a verb is not May.
     private const string CalendarName = "(?-i:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag|" +
@@ -117,7 +131,7 @@ public static partial class SpokenCorrections
 
     // "Vendor B, no wait, Vendor C": the repair retraces the head word with a new identifier.
     [GeneratedRegex(@"(?<![\p{L}\p{N}_/\\.:\-])(?<pre>)(?<head>\p{L}{2,})(?>\s+)(?<old>(?-i:\p{Lu})|\d+)(?![\p{L}\p{N}])" + Cue +
-        @"(?<repair>\k<head>\s+(?<new>(?-i:\p{Lu})|\d+))" + End, RegexOptions.IgnoreCase, TimeoutMs)]
+        @"(?<repair>\k<head>\s+(?<new>(?-i:\p{Lu})|" + Number + "))" + NumberEnd, RegexOptions.IgnoreCase, TimeoutMs)]
     private static partial Regex Label();
 
     // Right-to-left from the match start: does an alternative value end just before it?
@@ -132,6 +146,9 @@ public static partial class SpokenCorrections
 
     [GeneratedRegex(@"\G[ \t]*(?:[,.;:!?]|\r?\n|$)")]
     private static partial Regex ClauseEnd();
+
+    [GeneratedRegex(@"\G\s+\p{Ll}")]
+    private static partial Regex LowercaseAfter();
 
     // A "Scratch that." sentence removes itself and the one sentence before it on the same line;
     // "Scratch that, the meeting is on Friday." keeps what follows the comma. "Scratch that itch"

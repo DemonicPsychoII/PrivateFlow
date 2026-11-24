@@ -51,7 +51,8 @@ static class JobSelection
             "src/PrivateFlow.Core/VocabularyTerms.cs", "src/PrivateFlow.Core/StartingCapture.cs"],
             ["engine/smoke-test", "engine/*/dictation/*"]),
         new("meeting pipeline", [
-            "src/PrivateFlow.Windows/MeetingCapture.cs", "src/PrivateFlow.Windows/MeetingTranscriber.cs", "src/PrivateFlow.Windows/MeetingNotesWriter.cs",
+            "src/PrivateFlow.Windows/MeetingCapture.cs", "src/PrivateFlow.Windows/MeetingTranscriber.cs", "src/PrivateFlow.Windows/ChannelAudio.cs",
+            "src/PrivateFlow.Windows/MeetingNotesWriter.cs",
             "src/PrivateFlow.Windows/LocalRewriter.cs", "src/PrivateFlow.Core/MeetingArchive.cs", "src/PrivateFlow.Core/MeetingVocabulary.cs",
             "src/PrivateFlow.Core/ExtractiveNotes.cs", "src/PrivateFlow.Core/ModelNotes.cs", "src/PrivateFlow.Core/VocabularyTerms.cs",
             "src/PrivateFlow.Core/StartingCapture.cs"],
@@ -64,7 +65,7 @@ static class JobSelection
         new("smoke test", ["scripts/smoke-test.ps1", "src/PrivateFlow.Windows/App.xaml.cs"], ["engine/smoke-test"]),
         new("speech worker faults", ["src/PrivateFlow.Verification/WorkerFaults.cs", "scripts/verify-worker-faults.ps1"], ["engine/worker-faults"]),
         new("compressed imports", ["src/PrivateFlow.Verification/ImportVerification.cs", "scripts/verify-imports.ps1"], ["engine/imports"]),
-        new("workspace verification", ["src/PrivateFlow.Verification/WorkspaceVerification.cs", "scripts/verify-workspace.ps1"], ["engine/workspace-verification"]),
+        new("workspace verification", ["src/PrivateFlow.Verification/WorkspaceVerification*.cs", "scripts/verify-workspace.ps1"], ["engine/workspace-verification"]),
         new("the app the workspace verification drives", ["src/PrivateFlow.Windows/**", "src/PrivateFlow.Core/**"], ["engine/workspace-verification"]),
         new("overlay", ["src/PrivateFlow.Verification/OverlayVerification.cs", "src/PrivateFlow.Windows/RecordingHud.cs", "src/PrivateFlow.Windows/MeetingWave.cs",
             "src/PrivateFlow.Windows/Native.cs"], ["desktop/verify-overlay"]),

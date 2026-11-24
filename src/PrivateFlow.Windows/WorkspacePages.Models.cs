@@ -274,7 +274,8 @@ internal sealed partial class WorkspacePages
                 Row(Stack(new TextBlock { Text = "Local polish uses", Style = Theme("RowTitle") },
                     Description("The two models are about the same size, so the meeting notes model lets one download serve notes and polish. Measured with the app's own checks: " +
                         "the meeting notes model polished 33 of 36 test dictations, 0.4 s typical on the GPU, where it holds about 3.1 GB until five idle minutes pass, and 2.5 s on the processor only; " +
-                        "the Local polish model polished 20 of 22 in an earlier test with other cases, 0.5 to 1.6 s on the processor. A dictation still waits while meeting notes are written.")), polishChoice),
+                        "the Local polish model polished 20 of 22 in an earlier test with other cases, 0.5 to 1.6 s on the processor. These times are with the model loaded: the first polish after Private Flow starts, " +
+                        "or after five idle minutes, loads it first, about 10 s for the Local polish model on the processor. A dictation still waits while meeting notes are written.")), polishChoice),
                 polishMissing,
                 notesRunsOnRow,
                 notesStyle));

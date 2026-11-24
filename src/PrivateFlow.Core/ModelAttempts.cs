@@ -21,10 +21,10 @@ public sealed record MemoryWaitTiming(TimeSpan Limit, TimeSpan Poll, TimeSpan No
 // pass ends with the reason.
 public static class ModelAttempts
 {
-    // work runs the pass with a model; memoryOf reads a GPU memory shortage from a failure; waitForMemory waits for memory to free up
-    // and returns null once the model loaded, else the failure that ended the wait; next gets the step to show and whether the same model
-    // is tried again, before the following attempt.
-    public static async Task<AttemptResult<T>> RunAsync<T>(string meetingModel, string speechModel, Func<string, Task<T>> work,
+    // work runs the pass with a model and hears whether another model can still finish the pass if this one fails; memoryOf reads a GPU
+    // memory shortage from a failure; waitForMemory waits for memory to free up and returns null once the model loaded, else the failure
+    // that ended the wait; next gets the step to show and whether the same model is tried again, before the following attempt.
+    public static async Task<AttemptResult<T>> RunAsync<T>(string meetingModel, string speechModel, Func<string, bool, Task<T>> work,
         Func<Exception, GpuMemory?> memoryOf, Func<string, GpuMemory, Task<Exception?>> waitForMemory, Func<string, bool, Task> next, Func<string, string> name,
         CancellationToken token)
     {
@@ -34,8 +34,9 @@ public static class ModelAttempts
         for (var attempt = 0; ;)
         {
             var model = models[attempt];
+            var otherModel = Array.FindIndex(models, attempt + 1, other => !Same(other, model));
             Exception failure;
-            try { return new(await work(model), model, fallback); }
+            try { return new(await work(model, otherModel >= 0), model, fallback); }
             catch (Exception ex) when (ex is InvalidOperationException or TimeoutException && !token.IsCancellationRequested) { failure = ex; }
             if (memoryOf(failure) is { CanFree: true } shortage && waited.Add(model))
             {
@@ -44,7 +45,7 @@ public static class ModelAttempts
                 failure = ended;
             }
             var memory = memoryOf(failure);
-            var following = memory is null ? attempt + 1 : Array.FindIndex(models, attempt + 1, other => !Same(other, model));
+            var following = memory is null ? attempt + 1 : otherModel;
             if (following < 0 || following >= models.Length)
             {
                 if (memory is not null) throw new InvalidOperationException(failure.Message + (memory.CanFree ? " Close what uses the GPU or let it finish, then finish the transcript again." : ""));

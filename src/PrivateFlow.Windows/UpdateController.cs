@@ -53,11 +53,13 @@ internal sealed class UpdateController(Window owner, TrayIcon tray, Action<Updat
         try
         {
             status("Checking for the update…");
-            offer = await UpdateCheck.FindAsync(CancellationToken.None);
+            (offer, var upToDate) = await UpdateCheck.CheckAsync(CancellationToken.None);
             if (offer is null)
             {
-                problem(new("update-not-started", PrivateFlow.Core.NoticeKind.Warning, "The update did not start",
-                    "The check found no newer version, or could not reach the update source. Nothing was started; try again later."));
+                problem(upToDate
+                    ? new("update-not-started", PrivateFlow.Core.NoticeKind.Note, "Private Flow is up to date", $"Version {typeof(UpdateController).Assembly.GetName().Version?.ToString(3)} is the newest. Nothing was started.")
+                    : new("update-not-started", PrivateFlow.Core.NoticeKind.Warning, "The update did not start",
+                        "The check could not reach the update source or found no usable release. Nothing was started; try again later."));
                 status("Ready");
                 return null;
             }

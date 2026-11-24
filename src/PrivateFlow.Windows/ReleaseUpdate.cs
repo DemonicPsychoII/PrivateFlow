@@ -5,6 +5,8 @@ using System.Text.RegularExpressions;
 namespace PrivateFlow.Windows;
 
 internal sealed record ReleasePackage(string Tag, string Version, Uri DownloadUrl, long Size, string Sha256, string? Digest);
+// What a release check found: a newer release to install, or none; UpToDate only when the latest release was read and is not newer.
+internal sealed record ReleaseLookup(ReleasePackage? Package, bool UpToDate);
 
 internal static class ReleaseUpdate
 {
@@ -13,8 +15,12 @@ internal static class ReleaseUpdate
     internal static Version? VersionFromTag(string? tag) => tag is not null && Regex.IsMatch(tag, @"^v\d+\.\d+\.\d+$")
         && Version.TryParse(tag[1..], out var version) ? version : null;
 
-    internal static async Task<ReleasePackage?> FindAsync(HttpClient client, Version installed, CancellationToken cancellation)
+    internal static async Task<ReleasePackage?> FindAsync(HttpClient client, Version installed, CancellationToken cancellation) =>
+        (await LookupAsync(client, installed, cancellation)).Package;
+
+    internal static async Task<ReleaseLookup> LookupAsync(HttpClient client, Version installed, CancellationToken cancellation)
     {
+        ReleaseLookup Failed() => new(null, false);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         timeout.CancelAfter(TimeSpan.FromSeconds(60));
         try
@@ -23,44 +29,44 @@ internal static class ReleaseUpdate
             using var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{Repository}/releases/latest");
             request.Headers.UserAgent.ParseAdd("PrivateFlow-updater");
             using var response = await client.SendAsync(request, timeout.Token);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode) return Failed();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
             var release = document.RootElement;
             var tag = release.GetProperty("tag_name").GetString();
-            if (release.GetProperty("draft").GetBoolean() || release.GetProperty("prerelease").GetBoolean()
-                || VersionFromTag(tag) is not { } version || version <= new Version(installed.Major, installed.Minor, installed.Build)) return null;
+            if (release.GetProperty("draft").GetBoolean() || release.GetProperty("prerelease").GetBoolean() || VersionFromTag(tag) is not { } version) return Failed();
+            if (version <= new Version(installed.Major, installed.Minor, installed.Build)) return new(null, true);
             var assets = release.GetProperty("assets").EnumerateArray().ToArray();
             var packages = assets.Where(asset => asset.GetProperty("name").GetString() == "PrivateFlow-win-x64.zip").ToArray();
             var manifests = assets.Where(asset => asset.GetProperty("name").GetString() == "manifest.json").ToArray();
-            if (packages.Length != 1 || manifests.Length != 1) return null;
+            if (packages.Length != 1 || manifests.Length != 1) return Failed();
             var package = packages[0];
             var size = package.GetProperty("size").GetInt64();
             var digest = package.TryGetProperty("digest", out var digestValue) && digestValue.ValueKind != JsonValueKind.Null ? digestValue.GetString() : null;
-            if (size <= 0 || !AssetUrl(package, tag!, out var downloadUrl) || !AssetUrl(manifests[0], tag!, out var manifestUrl)) return null;
+            if (size <= 0 || !AssetUrl(package, tag!, out var downloadUrl) || !AssetUrl(manifests[0], tag!, out var manifestUrl)) return Failed();
             using var manifestRequest = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
             manifestRequest.Headers.UserAgent.ParseAdd("PrivateFlow-updater");
             using var manifestResponse = await client.SendAsync(manifestRequest, timeout.Token);
-            if (!manifestResponse.IsSuccessStatusCode) return null;
+            if (!manifestResponse.IsSuccessStatusCode) return Failed();
             using var manifest = JsonDocument.Parse(await manifestResponse.Content.ReadAsStringAsync(timeout.Token));
             var hash = ManifestHash(manifest.RootElement, version.ToString(), size, digest);
-            if (hash is null) return null;
+            if (hash is null) return Failed();
             // Releases made by the release workflow also carry SHA256SUMS, which must agree with the manifest; install.ps1 checks the same.
             var checksums = assets.Where(asset => asset.GetProperty("name").GetString() == "SHA256SUMS").ToArray();
-            if (checksums.Length > 1) return null;
+            if (checksums.Length > 1) return Failed();
             if (checksums.Length == 1)
             {
-                if (!AssetUrl(checksums[0], tag!, out var checksumUrl)) return null;
+                if (!AssetUrl(checksums[0], tag!, out var checksumUrl)) return Failed();
                 using var checksumRequest = new HttpRequestMessage(HttpMethod.Get, checksumUrl);
                 checksumRequest.Headers.UserAgent.ParseAdd("PrivateFlow-updater");
                 using var checksumResponse = await client.SendAsync(checksumRequest, timeout.Token);
                 if (!checksumResponse.IsSuccessStatusCode
-                    || !hash.Equals(ListedChecksum(await checksumResponse.Content.ReadAsStringAsync(timeout.Token), "PrivateFlow-win-x64.zip"), StringComparison.OrdinalIgnoreCase)) return null;
+                    || !hash.Equals(ListedChecksum(await checksumResponse.Content.ReadAsStringAsync(timeout.Token), "PrivateFlow-win-x64.zip"), StringComparison.OrdinalIgnoreCase)) return Failed();
             }
-            return new(tag!, version.ToString(), downloadUrl!, size, hash, digest);
+            return new(new(tag!, version.ToString(), downloadUrl!, size, hash, digest), false);
         }
         catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or JsonException
             or KeyNotFoundException or InvalidOperationException or FormatException or OverflowException)
-        { return null; }
+        { return Failed(); }
     }
 
     private static bool AssetUrl(JsonElement asset, string tag, out Uri? url) =>

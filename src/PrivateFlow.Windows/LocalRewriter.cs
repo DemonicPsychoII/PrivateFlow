@@ -106,13 +106,14 @@ internal static class LocalRewriter
         }, CancellationToken.None);
     }
 
-    // The meeting notes model can polish too; it then runs where the notes run, with the polish model's context.
+    // The meeting notes model can polish too; it then runs where the notes run, with the polish model's context. Either model serves one
+    // dictation at a time, so one slot gets the whole context, as for the notes.
     private static Launch PolishLaunch(Settings settings) => settings.LocalPolishModel == LocalPolishModel.MeetingNotesModel
         ? new(settings.MeetingNotesEnginePath, settings.MeetingNotesModelPath,
             [.. GpuArguments(settings.MeetingNotesGpuLayers), "-c", "8192", "-np", "1", "-t", Threads, "--reasoning", "off", "--chat-template-kwargs", "{\"enable_thinking\":false}"],
             PolishWithNotesModelMissing)
         : new(settings.LocalRewriteEnginePath, settings.LocalRewriteModelPath,
-            ["-ngl", PolishModelGpuLayers.ToString(), "-c", "8192", "-t", Threads, "--chat-template-kwargs", "{\"enable_thinking\":false}"],
+            ["-ngl", PolishModelGpuLayers.ToString(), "-c", "8192", "-np", "1", "-t", Threads, "--chat-template-kwargs", "{\"enable_thinking\":false}"],
             PolishMissing);
     // The notes runtime offloads to the GPU; automatic layers let llama.cpp keep its default 1 GiB margin of GPU memory free and leave the
     // remaining layers on the processor when the speech models already use the GPU. One slot gets the whole context.
@@ -202,10 +203,10 @@ internal static class LocalRewriter
                 if (choice.GetProperty("finish_reason").GetString() != "stop") throw new AnswerRejectedException("Local output was incomplete.");
                 return choice.GetProperty("message").GetProperty("content").GetString() ?? "";
             }
-            catch (OperationCanceledException) when (!token.IsCancellationRequested) { Shutdown(); throw new TimeoutException(task + " timed out."); }
-            catch (OperationCanceledException) { if (identity is null) Shutdown(); else lastUse = DateTime.UtcNow; throw; }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested) { await StopAsync(); throw new TimeoutException(task + " timed out."); }
+            catch (OperationCanceledException) { if (identity is null) await StopAsync(); else lastUse = DateTime.UtcNow; throw; }
             catch (AnswerRejectedException) { throw; }
-            catch { Shutdown(); throw; }
+            catch { await StopAsync(); throw; }
         }
         private HttpRequestMessage Request(string path, HttpMethod method)
         {
@@ -217,7 +218,10 @@ internal static class LocalRewriter
         private async Task StartAsync(Launch launch, CancellationToken token)
         {
             if (process is { HasExited: false } && identity == launch.Identity) return;
-            Shutdown();
+            // A cancel that came with the lock leaves the running server alone; one that came while it stopped starts no other.
+            token.ThrowIfCancellationRequested();
+            await StopAsync();
+            token.ThrowIfCancellationRequested();
             if (!File.Exists(launch.Engine) || !File.Exists(launch.Model)) throw new InvalidOperationException(launch.MissingMessage);
             var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
             var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
@@ -253,6 +257,9 @@ internal static class LocalRewriter
             identity = launch.Identity; onGpu = launch.UsesGpu;
             lastUse = DateTime.UtcNow;
         }
+        // Stopping waits up to 10 s for the exit, so a request stops its server on the thread pool: a dictation awaits the polish on the
+        // interface thread, which would otherwise freeze after Escape during a start, a failure or a change of launch. The lock stays held.
+        private Task StopAsync() => Task.Run(Shutdown);
         private static async Task DrainAsync(StreamReader reader)
         { try { var buffer = new char[2048]; while (await reader.ReadAsync(buffer) > 0) { } } catch (IOException) { } catch (ObjectDisposedException) { } }
         public void Shutdown()

@@ -483,6 +483,33 @@ static class OutputStyleChecks
             "If you itch, scratch that itch.", "Use 3 V to 5 V, correction, 6 V.", "We could scratch that, it is optional.", "Is it Lieferant B? Nein, Lieferant C.",
         })
             Same(SpokenCorrections.Apply(dictated), dictated, "Backtrack keeps answers and content across sentence ends: " + dictated);
+        // A value that continues with a hyphen is part of a word, not a repair; corrections after words that contain a number word
+        // (council review of 0.5.24) still apply.
+        foreach (var dictated in new[] { "Use 3, no wait, 4-wheel drive.", "Use 3, no wait, 4\u2011wheel drive.", "Use 3, no wait, 4-1/2-inch bolts.", "Use 3, no wait, 4-20-mA sensors.", "Use 3, no wait, 4-1.5-inch bolts.", "Use 3, no wait, 4-0.5-mm wire.", "Use 3, no wait, 4-1,5mm Kabel.", "Nimm 3, Korrektur, 4,5-mm-Schrauben.", "Nimm 3, nein, 4,5-Zoll-Schrauben.",
+            "Use 3, no wait, 4:3-ratio.", "Open 3, no wait, 4-6.pdf.", "Use 3, no wait, 4-2.txt.", "Use 500, no wait, 1,000-foot cable.",
+            "Use 4, no wait, 16:9-format video.", "Use 3, no wait, 4,5mm cable.", "Use 3, no wait, 4\u2013wheel drive.",
+            "Room 3, no wait, Room 4-wheel drive.", "Open folder 3, no wait, folder 4-6.pdf.",
+            "Nimm 3, Korrektur, nimm 4,5-mm-Schrauben.", "Use 500, no wait, use 1,000-foot cable.", "Open file 3, no wait, file 4,5.pdf.",
+            "Use Cable 3, no wait, Cable 4,5mm.", "Use Format 4, no wait, Format 16:9-format.", "Open Monday, no wait, Tuesday-report.pdf.",
+            "Open Monday, no wait, Tuesday-Report.pdf.", "Transfer 500, no wait, 1,000 dollars.",
+            "Open Monday, no wait, Tuesday-Report2.pdf.", "Open Monday, no wait, Tuesday-Q3-Report.pdf.", "Use 5, no wait, 10 AM/FM radios.",
+            "Open 3, no wait, 4 pm.pdf.", "Es bleibt bei 20, nein, 50 am Tag sind zu viel.",
+            "Not at 2, no, 3 pm works better.",
+            "Es bleibt bei 20, nein, 2.50 am Tag sind zu viel.", "Use 3, no wait, 4.25 Uhr.",
+            "Let's meet at 3 p.m. Actually, 4 p.m. works better.", "We start at 9 a.m., actually 10 a.m. is too late." })
+            Same(SpokenCorrections.Apply(dictated), dictated, "Backtrack keeps a value that is part of a hyphenated word: " + dictated);
+        foreach (var (dictated, expected) in new[]
+        {
+            ("Set the latency to 50 ms, no wait, 60 ms.", "Set the latency to 60 ms."), ("Move the phone to 5, no wait, 6.", "Move the phone to 6."),
+            ("Set the height to 5, no wait, 6.", "Set the height to 6."), ("Pages 3, no wait, 4-6.", "Pages 4-6."), ("Set 3, no wait, 4-6.5.", "Set 4-6.5."), ("Let's meet Monday, no wait, Tuesday-Thursday.", "Let's meet Tuesday-Thursday."),
+            ("Use Room 3, no wait, Room 4-A today.", "Use Room 4-A today."), ("Use Room 3, no wait, Room 4, please.", "Use Room 4, please."), ("Meet at 3, no wait, 4:30 pm.", "Meet at 4:30 pm."),
+            ("Meet at 3, no wait, 4:30pm.", "Meet at 4:30pm."), ("Meet at 3, actually 4:30 pm.", "Meet at 4:30 pm."),
+            ("Meet at 3, no wait, at 4:30pm.", "Meet at 4:30pm."),
+            ("Meet at 3, actually 4:30 a.m. Next item.", "Meet at 4:30 a.m. Next item."),
+            ("Meet at 3. Sorry, I meant 4:30 p.m. Next item.", "Meet at 4:30 p.m. Next item."),
+            ("Treffen um 3, nein, um 4:30 Uhr.", "Treffen um 4:30 Uhr."), ("Pages 3, no wait, 4\u20136.", "Pages 4\u20136."), ("Am Montag, nein, Dienstag-Nachmittag.", "Am Dienstag-Nachmittag."), ("Wir arbeiten von 8 Uhr, nein, von 9 Uhr.", "Wir arbeiten von 9 Uhr."),
+        })
+            Same(SpokenCorrections.Apply(dictated), expected, "Backtrack applies a correction after a word that contains a number word, or to a range: " + dictated);
         // Review round 1 on PR #14: continued sentences, earlier clauses, paths, quotations, unit case and alternatives.
         foreach (var (dictated, expected) in new[]
         {

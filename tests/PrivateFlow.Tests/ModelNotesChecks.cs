@@ -312,9 +312,10 @@ static class ModelNotesChecks
             "a model that fits loads; short memory is refused where a final pass can wait or fall back and loads with a warning for dictation; a model larger than the GPU is always refused; an unknown GPU size loads");
         // Scripted final passes: each work call and each wait takes the next outcome. "ok" succeeds (a wait that succeeds has loaded the model),
         // "memory" is a shortage other work can free, "large" a model larger than the GPU, anything else a failure with that message.
-        async Task<(string Model, string Fallback, string Error, string Calls)> Attempts(string meeting, string[] work, string[] waits)
+        // Limits lists, per work call, whether its requests get the shorter limit because another model is left.
+        async Task<(string Model, string Fallback, string Error, string Calls, string Limits)> Attempts(string meeting, string[] work, string[] waits)
         {
-            var calls = new List<string>(); var works = new Queue<string>(work); var waiting = new Queue<string>(waits);
+            var calls = new List<string>(); var limits = new List<string>(); var works = new Queue<string>(work); var waiting = new Queue<string>(waits);
             Exception Failure(string kind)
             {
                 var failure = new InvalidOperationException(kind);
@@ -324,13 +325,17 @@ static class ModelNotesChecks
             try
             {
                 var result = await ModelAttempts.RunAsync(meeting, "speech",
-                    async model => { calls.Add("work " + model); await Task.Yield(); var outcome = works.Dequeue(); return outcome == "ok" ? model : throw Failure(outcome); },
+                    async (model, otherModelLeft) =>
+                    {
+                        calls.Add("work " + model); limits.Add(otherModelLeft ? "shorter" : "five minutes");
+                        await Task.Yield(); var outcome = works.Dequeue(); return outcome == "ok" ? model : throw Failure(outcome);
+                    },
                     failure => failure.Data["memory"] as GpuMemory,
                     async (model, _) => { calls.Add("wait " + model); await Task.Yield(); var outcome = waiting.Dequeue(); return outcome == "ok" ? null : Failure(outcome); },
                     (step, retry) => { calls.Add((retry ? "retry " : "next ") + step); return Task.CompletedTask; }, model => model, CancellationToken.None);
-                return (result.Model, result.Fallback, "", string.Join(" | ", calls));
+                return (result.Model, result.Fallback, "", string.Join(" | ", calls), string.Join(" | ", limits));
             }
-            catch (InvalidOperationException ex) { return ("", "", ex.Message, string.Join(" | ", calls)); }
+            catch (InvalidOperationException ex) { return ("", "", ex.Message, string.Join(" | ", calls), string.Join(" | ", limits)); }
         }
         var waitThenCrash = await Attempts("meeting", ["memory", "worker ended", "ok"], ["worker ended while loading"]);
         Check(waitThenCrash is { Model: "speech", Error: "" } && waitThenCrash.Fallback == "The meeting model meeting failed twice (worker ended), so the speech model speech produced this transcript."
@@ -353,5 +358,25 @@ static class ModelNotesChecks
             "when only the speech model is left and it does not fit after the wait, the pass ends with the reason and says what to do");
         var failsTwice = await Attempts("", ["first", "second"], []);
         Check(failsTwice is { Error: "second" } && failsTwice.Calls.Contains("retry"), "the speech model alone is tried once more, then the pass ends with the last error");
+        Check(waitThenCrash.Limits == "shorter | shorter | five minutes" && failsTwice.Limits == "five minutes | five minutes",
+            $"only the meeting model's attempts, which the speech model can still take over, get the shorter request limit; the speech model's own attempts keep five minutes ({waitThenCrash.Limits}; {failsTwice.Limits})");
+
+        // The time one speech worker request may take, from the pinned model files.
+        const long Base = 147_951_465, Medium = 1_533_763_059, Turbo = 874_188_075, LargeV3 = 3_095_033_483;
+        double Limit(double audioSeconds, long modelBytes, bool onGpu, bool otherModelLeft = true) => SpeechRuntime.SpeechRequestLimit(audioSeconds, modelBytes, onGpu, otherModelLeft).TotalSeconds;
+        var largeOnGpu = Limit(30, LargeV3, true);
+        Check(largeOnGpu is > 50 and < 75 && Limit(15.5, LargeV3, true) is > 10 * 1.8 and < 60,
+            $"on the GPU a 30 s request of large-v3 gets about a minute ({largeOnGpu:0} s); its decode of 15.5 s, 1.8 s at full speed, gets more than ten times that and gives up long before the 170 s other GPU work once made it take");
+        Check(Limit(20, Turbo, true) == 30 && Limit(0.1, LargeV3, true) is >= 30 and < 40 && Limit(30, Medium, true) is >= 30 and < 40,
+            "short requests and the smaller models on the GPU get the half-minute floor, a hundred times what 20 s with large-v3-turbo take there");
+        Check(Limit(20, Medium, false) == 300 && Limit(0.1, Medium, false) == 300 && Limit(30, Turbo, false) == 300 && Limit(30, LargeV3, false) == 300,
+            "on the processor medium and larger models keep the five minutes every request had, more than twenty times the 14 s medium took for 20 s on a fast processor");
+        var baseShort = Limit(0.1, Base, false); var baseLong = Limit(30, Base, false);
+        Check(baseShort is > 60 and < 100 && Limit(20, Base, false) > 101.9 && baseLong is > 150 and < 300 && baseLong > baseShort,
+            $"base on the processor gets {baseShort:0} to {baseLong:0} s, more for more audio: for 20 s of speech more than the 101.9 s a whole desktop step took on a busy test VM, against 1.6 s on a fast processor");
+        Check(Limit(30, 100_000_000_000, false) == 300 && Limit(30, 100_000_000_000, true) == 300 && Limit(0, 1_000_000, false) == 30 && Limit(-5, Base, true) == 30,
+            "no request gets more than five minutes or less than half a minute, whatever the model and the audio");
+        Check(Limit(20, Turbo, true, otherModelLeft: false) == 300 && Limit(15.5, LargeV3, true, otherModelLeft: false) == 300 && Limit(0.1, Base, false, otherModelLeft: false) == 300,
+            "a request no other model can take over, a dictation's or the speech model's in a final pass, keeps five minutes: stopped, it would leave no text, and a dictation slowed down by too little GPU memory still finishes");
     }
 }

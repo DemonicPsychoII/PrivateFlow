@@ -114,7 +114,7 @@ public enum DictationInsertion
     NothingRecognized,
     // Automatic insertion is off: the Dictate page opens to review it.
     Review,
-    // Pasted into the window selected at the press, brought back to the front first; when it cannot be pasted it is left on the clipboard.
+    // Pasted into the window selected at the press while it is still in front; when it cannot be pasted it is left on the clipboard.
     Paste,
     // It waited for another task, maybe minutes: pasted only if the selected window is still in front by itself, without bringing it
     // back, and otherwise the clipboard is left alone.
@@ -205,6 +205,10 @@ public static class DictationTable
     public static bool IsRecording(DictationState state) => state is Starting or Recording;
     public static bool IsBusy(DictationState state) => state is Transcribing or WaitingForNotes or PolishingAfterWait or Pasting or Cancelling or TranscribingFile;
     public static bool IsQueued(DictationState state) => state is WaitingForNotes or PolishingAfterWait;
+    // The window's timer draws the recording progress and the processing mark and reads the keys of a hold, so it ticks every 50 ms while
+    // a dictation runs. Otherwise it only unloads models idle for five minutes and announces a found update, which a few seconds' delay
+    // does not change, so an idle or hidden window wakes the interface thread every 2 s instead of 20 times a second.
+    public static TimeSpan TimerInterval(DictationState state) => IsRecording(state) || IsBusy(state) ? TimeSpan.FromMilliseconds(50) : TimeSpan.FromSeconds(2);
 
     // pasteAllowed: this instance may paste into other apps (PasteAllowed below).
     public static DictationInsertion Insertion(bool polishSkipped, string text, bool autoInsert, bool waited, bool pasteAllowed = true) =>
@@ -216,7 +220,6 @@ public static class DictationTable
     // The app pastes; the test build (an audio library in place of the microphone) only in the disposable test VM, a diagnostic instance
     // of the verification host never: pastes into real apps belong in the VM (AGENTS.md).
     public static bool PasteAllowed(bool testBuild, bool diagnostic, bool inTestVm) => !diagnostic && (!testBuild || inTestVm);
-    public static bool RestoresForeground(DictationInsertion insertion) => insertion == DictationInsertion.Paste;
     // A clipboard the paste could not save is never replaced by the copy either (clipboardUnreadable).
     public static bool CopiesWhenNotPasted(DictationInsertion insertion, bool clipboardUnreadable = false) => insertion == DictationInsertion.Paste && !clipboardUnreadable;
 }

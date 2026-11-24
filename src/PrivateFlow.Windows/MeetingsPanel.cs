@@ -258,11 +258,13 @@ internal sealed partial class MeetingsPanel : DockPanel, IDisposable
         SystemAudioColorChoice = ColorSwatches(Changed);
         PreferenceControls = Controls();
         timer.Tick += (_, _) => Tick();
-        try { archive.DeleteLeftoverAudio(); }
+        // Every meeting file is read once, on the interface thread, for the leftover audio, the history and the unfinished meetings.
+        var stored = archive.List();
+        try { archive.DeleteLeftoverAudio(stored); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         { meetingNotices.Report(new("meeting-leftover-audio", NoticeKind.Error, "Audio left by an earlier run was not deleted", ex.Message)); }
-        Refresh();
-        if (archive.Unfinished() is { Count: > 0 } unfinished) this.notify(UnfinishedSummary(unfinished) + " Open Meetings to finish or delete it.", true);
+        Refresh(stored);
+        if (archive.Unfinished(stored) is { Count: > 0 } unfinished) this.notify(UnfinishedSummary(unfinished) + " Open Meetings to finish or delete it.", true);
     }
     internal static System.Windows.Controls.ProgressBar ProgressBar() => new()
     {

@@ -1,3 +1,41 @@
+# Private Flow 0.5.29 (beta): less work while idle (2026-11-23)
+
+- **Private Flow wakes up less while idle.** Its window's timer ran 20 times a second all the time, also hidden in the tray. It now does so only while a dictation records or is processed, and every 2 seconds otherwise; idle unloads of the models and the update notice may come up to 2 seconds later.
+- **The meetings are read once at start.** The History and the unfinished meetings read every saved meeting up to four times when Private Flow started, and twice on every refresh of the list; now once each.
+- **A final pass slowed by other GPU work gives way sooner.** Every step of speech recognition could take five minutes before Private Flow gave up on it. A step of large-v3 in the final pass of a meeting or file now gives up after half a minute to about a minute on the GPU (about a minute for 30 s of audio), so a step that other GPU work slows down ends sooner, and the final pass tries once more and then finishes with the smaller speech model. Steps that no other model could take over keep the five minutes: dictations, and the speech model's own steps in a final pass.
+- Local polish with the Local polish model starts its server with one slot that has the whole context, as the meeting notes do.
+
+# Private Flow 0.5.28 (beta): Local polish stops without freezing the window (2026-11-23)
+
+- **Escape during Local polish no longer freezes the window.** Escape or Cancel while the Local polish model was still loading, a polish that failed or ran out of time, and the first polish after its model or settings changed waited for the model's server to end before the window responded again, for up to 10 seconds. The server now ends in the background and the window stays responsive. The Clean text appears once the server has ended.
+- A polish cancelled just as it begins no longer starts the model only to stop it again, and no longer stops a model that is already loaded. One cancelled while the previous model stops no longer starts the next one.
+
+# Private Flow 0.5.27 (beta): times in corrections
+
+- "Es bleibt bei 20, nein, 50 am Tag sind zu viel." is left as spoken again; 0.5.26 read "50 am" as a time and lost the 20. "Not at 2, no, 3 pm works better." is left as spoken again for the same reason. "Meet at 3, no wait, 4:30pm." and "Meet at 3, actually 4:30 pm." are corrected again.
+
+# Private Flow 0.5.26 (beta): repeated words and weekday file names in corrections (2026-11-23)
+
+- A correction that repeats the word before the value ("Nimm 3, Korrektur, nimm 4,5-mm-Schrauben.", "Open file 3, no wait, file 4,5.pdf.") and a weekday at the start of a file name or a lowercase compound ("Open Monday, no wait, Tuesday-report.pdf.") are left as spoken: the old value was lost.
+- "Meet at 3, no wait, 4:30 pm." is corrected again to "Meet at 4:30 pm."; 0.5.25 left a time with minutes after a value without a unit as spoken.
+
+# Private Flow 0.5.25 (beta): decimals and file names in corrections (2026-11-23)
+
+- A correction whose new value is a decimal or ratio in a hyphenated compound ("Nimm 3, Korrektur, 4,5-mm-Schrauben.", "16:9-format", "1,000-foot"), a number followed by a unit without a space ("4,5mm") or a file name such as "4-6.pdf" is left as spoken: the old value was lost. An en dash counts as a hyphen too.
+- Weekday corrections into a hyphenated word and label corrections to a single letter apply again ("Monday, no wait, Tuesday-Thursday", "Room 3, no wait, Room 4-A"); 0.5.24 left them as spoken. A label correction into a compound ("Room 4-wheel") stays as spoken.
+
+# Private Flow 0.5.24 (beta): a value in a hyphenated word is no correction (2026-11-23)
+
+- A correction whose new value is part of a hyphenated compound is left as spoken: "Use 3, no wait, 4-wheel drive." became "Use 4-wheel drive.", with the 3 lost; the same for "4-1/2-inch" or "4-20-mA", and with the hyphen and non-breaking hyphen of Unicode. A plain range ("Pages 3, no wait, 4-6.") is still corrected.
+
+# Private Flow 0.5.23 (beta): clearer paste and update notices (2026-11-23)
+
+- **The window you switch to keeps the focus.** When you switched to another window while a dictation was transcribing, Private Flow brought the window you started in back to the front before pasting, and then often did not paste anyway. It now leaves your window in front, keeps the text on the clipboard and says "Not pasted: the selected window is no longer in front".
+- **The not-pasted card names the reason.** A key still held (Ctrl, Alt, Shift or Windows) showed "Windows blocked the paste"; it now says "Ctrl, Alt, Shift or Windows was still held". Within the same window the card says "the focus moved or Windows blocked the paste", because a move to another field right before the paste and a paste Windows refused cannot be told apart afterwards.
+- **Update says when you are up to date.** Update under About and updates showed the warning "The update did not start" both when no newer version exists and when the check failed. It now says "Private Flow is up to date" with the version, and keeps the warning for a failed check.
+- For screen readers, the History entry of the meeting recording now no longer says that Private Flow ended unexpectedly while recording it.
+- Settings → Models says that the first Local polish after a start, or after five idle minutes, loads the model first: about 10 s for the Local polish model on the processor.
+
 # Private Flow 0.5.22
 
 - **Cancelling a dictation no longer shows an error.** Escape, Cancel, Quit or a hold-to-talk tap during a recording showed the red card "The recording stopped with an error", because the cancel ended the speech recognition the way a failure does. It now says only that the dictation was cancelled, or released too soon.

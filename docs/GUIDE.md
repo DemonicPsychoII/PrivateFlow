@@ -128,8 +128,14 @@ Transcripts over 12,000 characters use Clean rather than risking truncation.
 **Auto-paste is on by default.** Password fields and Private Flow itself are
 excluded. Paste uses clipboard/Ctrl+V, excludes the text from Windows clipboard
 history/cloud sync, and restores the previous clipboard. Held modifiers block
-insertion. If insertion is unavailable, the text stays on the clipboard and a
-tray notification offers manual paste. Uncheck Auto-paste and Save preferences
+insertion. The text goes only to the window you started in while it is still in
+front: switch to another window before the paste and Private Flow leaves that
+window in front instead of bringing the first one back. If insertion is
+unavailable, the text stays on the clipboard, a card on Dictate names why (for
+example "the selected window is no longer in front" or "Ctrl, Alt, Shift or
+Windows was still held") and a tray notification offers manual paste. That text
+is kept out of the clipboard history too, so a later copy replaces it; Copy text
+on Dictate brings it back. Uncheck Auto-paste and Save preferences
 to review instead. Session IDs reject cancelled or stale results. Outlook, Word,
 Excel, PowerPoint, OneNote and Teams keep the dictated text on the clipboard for
 3 s, remote-desktop clients (mstsc, Windows App, Citrix, VMware, AnyDesk,
@@ -227,11 +233,14 @@ being written) leaves too little GPU memory for large-v3, the final pass shows
 "Waiting for GPU memory" with the free and needed memory and tries again every
 3 s for up to 30 s; while Private Flow's own meeting notes hold the GPU, it waits
 for them to finish, tries every 10 s and updates the step when they end. After
-the wait it tries one last load. A load that still fails, or any other failure,
-gets one more try with a fresh worker; then the speech model finishes the
-meeting, and the final message, the tray notification and the top of the notes
-say so and why. When no model fits, the pass ends with the reason and keeps the
-audio.
+the wait it tries one last load. A step of large-v3 that takes far longer than
+it needs, such as when other GPU work slows the GPU down, also fails: on the GPU
+after half a minute to about a minute (for 30 s of audio), on the processor after
+5 minutes. The speech model's steps keep 5 minutes, as in a dictation, because no
+other model could take over. A load that still fails, or any other failure, gets
+one more try with a fresh worker; then the speech model finishes the meeting, and
+the final message, the tray notification and the top of the notes say so and why.
+When no model fits, the pass ends with the reason and keeps the audio.
 
 System audio comes from the **Output device** under Settings → Microphone and
 speakers: **Follow Windows default output** (the default, also for older settings
@@ -488,7 +497,9 @@ variable stay; delete them by hand if you no longer need them.
 [public release](https://github.com/DemonicPsychoII/PrivateFlow/releases) by
 default. The check queries GitHub anonymously, ignores drafts and pre-releases,
 and offers only a higher `vX.Y.Z` version. With no release yet, no network, or a
-GitHub error or rate limit, the background check stays silent. To install the
+GitHub error or rate limit, the background check stays silent. **Update** says
+"Private Flow is up to date" when the newest release is not newer, and "The
+update did not start" when the check failed. To install the
 latest release by hand with an existing installer:
 
 ```powershell
@@ -661,8 +672,9 @@ Models inside it. `install.ps1`, and with it the in-app update, downloads first
 and stores the new paths only after it has stopped the running app, before it
 starts the new one. A running Private Flow holds `instance.lock` in its data
 folder; both lock files stay there and are released when their program ends. The server binds only to loopback,
-requires a random bearer key, discards logs, and stops on cancellation/failure
-or after five idle minutes. Models, recordings, settings and packages stay
+requires a random bearer key, discards logs, and stops on a failure, on a cancellation
+while it loads, or after five idle minutes. It stops in the background, so the
+window stays responsive while it ends. Models, recordings, settings and packages stay
 outside Git. There is no telemetry or silent cloud fallback.
 
 A `settings.json` whose content is not valid settings, for example after a

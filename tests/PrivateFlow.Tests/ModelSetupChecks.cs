@@ -260,6 +260,8 @@ static class ModelSetupChecks
                 "a polish server counts as on the GPU only with the CUDA build of llama.cpp and GPU layers; the processor build with automatic layers does not, so the final pass does not wait to stop it");
             Check(onGpu == sameAgain && onGpu != onProcessor && onProcessor.Contains("--device") && onGpu.Contains("auto") && polishModelServer != onProcessor && polishModelServer.Contains(served.LocalRewriteModelPath),
                 "the polish server's identity is its engine, model and launch arguments: moving Local polish to the processor only or to the other model starts it again, the same settings keep it");
+            Check(new[] { polishModelServer, onGpu, onProcessor }.All(identity => identity.Contains("\u0001-c\u00018192\u0001-np\u00011\u0001")),
+                "the Local polish server gets one slot with the whole 8,192-token context with either model, as the notes server does");
             // The choice for Local polish is a stored preference of the Models section, and a dictation with the meeting notes model chosen but
                 // missing pastes Clean and says why.
                 var choice = new PrivateFlow.Windows.Settings { LocalPolishModel = LocalPolishModel.MeetingNotesModel }; choice.SaveAs(choice);

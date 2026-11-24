@@ -26,7 +26,7 @@ public partial class MainWindow : Window, IDictationView
     // script run outside the app finds Private Flow running on this data folder and leaves settings.json alone.
     private static System.IO.FileStream? instanceLock;
     private static Settings LoadAsRunningInstance() { instanceLock ??= Settings.ClaimRunningInstance(); return Settings.Load(); }
-    private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(50) };
+    private readonly DispatcherTimer timer = new() { Interval = DictationTable.TimerInterval(DictationState.Idle) };
     private readonly TrayIcon tray;
     private readonly GlobalShortcuts shortcuts = new();
     private readonly MicrophoneDevices devices;
@@ -310,6 +310,8 @@ public partial class MainWindow : Window, IDictationView
     // Opens Models, where the model chosen for Local polish is installed with the bar.
     private void SetUpLocalPolish() { ShowSettings(ModelsTitle); pages.InstallForLocalPolish(ModelList.PolishModel(DictationPreferences())); }
     void IDictationView.SetUpLocalPolish() => SetUpLocalPolish();
+    // Setting the interval of a running DispatcherTimer schedules its next tick anew, so only a change sets it.
+    void IDictationView.SetTimerInterval(TimeSpan interval) { if (timer.Interval != interval) timer.Interval = interval; }
     private void ShowVocabulary(string vocabulary)
     {
         loadedVocabulary = vocabulary;

@@ -59,10 +59,14 @@ static class DictationChecks
             && DictationPolicy.NotPastedReason(SelectedTarget with { Password = yes }, SelectedTarget, false) == "password field or Private Flow itself"
             && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget with { OwnWindow = true }, false) == "password field or Private Flow itself"
             && DictationPolicy.NotPastedReason(SelectedTarget, OtherTarget with { Password = unknown }, false) == "the selected window is no longer in front"
-            && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget, false) == "Windows blocked the paste"
+            && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget, false) == "the focus moved or Windows blocked the paste"
+            && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget with { Control = SelectedTarget.Control + 1 }, false) == "the focus moved or Windows blocked the paste"
+            && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget, false, keysHeld: true) == "Ctrl, Alt, Shift or Windows was still held"
+            && DictationPolicy.NotPastedReason(SelectedTarget, OtherTarget, false, keysHeld: true) == "Ctrl, Alt, Shift or Windows was still held"
+            && DictationPolicy.NotPastedReason(SelectedTarget with { Password = yes }, SelectedTarget, false, keysHeld: true) == "password field or Private Flow itself"
             && DictationPolicy.NotPastedReason(SelectedTarget, SelectedTarget, true) == "the clipboard could not be saved"
             && DictationPolicy.NotPastedReason(SelectedTarget with { Window = 0, Password = unknown }, SelectedTarget, false) == "no window was in front at the start",
-            "the not-pasted notice names why: an unchecked field, a password field or Private Flow, another window in front, the clipboard, or Windows");
+            "the not-pasted notice names why: an unchecked field, a password field or Private Flow, a held modifier key, another window in front, the clipboard, or a moved focus or Windows within the same window");
         // The clipboard before a paste: an unreadable one is never replaced, by the paste or by the copy left when it fails.
         Check(ClipboardSnapshot.Classify(true, []) == ClipboardCopy.Empty && ClipboardSnapshot.Classify(true, [true, true, true]) == ClipboardCopy.Complete
             && ClipboardSnapshot.Classify(false, []) == ClipboardCopy.Incomplete && ClipboardSnapshot.Classify(true, [true, false, true]) == ClipboardCopy.Incomplete

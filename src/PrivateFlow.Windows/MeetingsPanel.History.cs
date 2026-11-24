@@ -213,12 +213,14 @@ internal sealed partial class MeetingsPanel
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => throw new NotSupportedException();
     }
 
-    internal void Refresh()
+    internal void Refresh() => Refresh(archive.List());
+    // stored: every meeting as List() has just read it; the history and the unfinished meetings both come from it.
+    private void Refresh(List<MeetingDocument> stored)
     {
-        documents = archive.List().Select(document => document.Id == selected?.Id ? selected : document).ToList();
+        documents = stored.Select(document => document.Id == selected?.Id ? selected : document).ToList();
         if (selected is not null && !documents.Contains(selected)) ClearSelection();
         DropListsOfDeletedMeetings();
-        var unfinished = archive.Unfinished(capture?.Document.Id);
+        var unfinished = archive.Unfinished(stored, capture?.Document.Id);
         unfinishedSection.Visibility = unfinished.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         unfinishedText.Text = unfinished.Count == 0 ? "" : UnfinishedSummary(unfinished) + "\n\n" + string.Join("\n", unfinished.Select(found => MeetingArchive.DescribeUnfinished(found.Document))) +
             "\n\nFinish transcripts runs the final pass over the kept audio and then deletes it, unless a meeting retains its audio. Delete their audio keeps the live preview as the transcript.";
@@ -251,7 +253,8 @@ internal sealed partial class MeetingsPanel
     private ListBoxItem Entry(MeetingDocument document)
     {
         var recordingNow = document.Id == capture?.Document.Id;
-        var reason = document.Status == "Complete" ? "" : MeetingArchive.UnfinishedReasonText(document);
+        // The meeting recording now is "Recording" on disk like one a crash ended; only a meeting found unfinished has a reason.
+        var reason = document.Status == "Complete" || recordingNow ? "" : MeetingArchive.UnfinishedReasonText(document);
         var hitCount = SearchHitCount(document.Id);
         var details = recordingNow ? "Recording now" : MeetingHistory.Describe(document, DateTimeOffset.Now) + (hitCount == 0 ? "" : hitCount == 1 ? " · 1 hit" : $" · {hitCount} hits");
         var titleLine = new WrapPanel();
@@ -264,7 +267,7 @@ internal sealed partial class MeetingsPanel
                 Child = new TextBlock { Text = "unfinished", FontSize = 11, Foreground = WorkspacePages.Theme<Brush>("WarningText") }
             });
         var content = WorkspacePages.Stack(titleLine, new TextBlock { Text = details, FontSize = 12, Foreground = WorkspacePages.Theme<Brush>("Muted"), Margin = new(0, 2, 0, 0) });
-        if (reason.Length > 0 && !recordingNow) content.Children.Add(new TextBlock { Text = reason, FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = WorkspacePages.Theme<Brush>("Faint"), Margin = new(0, 2, 0, 0) });
+        if (reason.Length > 0) content.Children.Add(new TextBlock { Text = reason, FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = WorkspacePages.Theme<Brush>("Faint"), Margin = new(0, 2, 0, 0) });
         var item = new ListBoxItem { Content = content, Tag = document, IsEnabled = !recordingNow, Opacity = recordingNow ? .5 : 1, Margin = new(0, 1, 0, 1) };
         AutomationProperties.SetName(item, string.Join(", ", new[] { document.Title, details, document.Status == "Complete" || recordingNow ? "" : "unfinished", reason }.Where(part => part.Length > 0)));
         return item;

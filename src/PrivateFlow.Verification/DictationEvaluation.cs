@@ -91,7 +91,7 @@ internal static class DictationEvaluation
                     var styled = session.Snapshot(); styled.OutputStyle = style;
                     var result = await DictationPipeline.ProcessAsync(speech.Text, styled, CancellationToken.None);
                     finals[style] = result.Final;
-                    if (style == OutputStyle.Concise && !string.IsNullOrWhiteSpace(result.Final)) conciseSent++;
+                    if (style == OutputStyle.Concise && !session.LiteralMode && !string.IsNullOrWhiteSpace(result.Final)) conciseSent++;
                     var reference = style == OutputStyle.Exact || entry.Edited is null ? entry.Reference : entry.Edited;
                     var score = TranscriptScoring.Score(reference.Length == 0 ? [] : [reference], result.Final);
                     styles.Add(new(style.ToString(), result.Final, result.Notice, ErrorReport.From(score.Errors()), score.CriticalItems.Count, score.CriticalItems.Count(item => item.Recalled),
@@ -103,12 +103,15 @@ internal static class DictationEvaluation
             }
             var functional = new List<CheckReport>();
             void Functional(string description, bool passed) => functional.Add(new(description, "", passed));
-            Functional("Concise reached the loopback stub once per non-empty dictation, always with its key", stub.Requests == conciseSent && stub.Authorized == stub.Requests);
+            // Literal mode keeps the words as spoken, so neither rewrite runs for it (DictationPipeline).
+            var literal = suite.Cases.Where(entry => entry.LiteralMode).Select(entry => entry.Name).ToHashSet();
+            Functional("Concise reached the loopback stub once per non-empty dictation outside literal mode, always with its key", stub.Requests == conciseSent && stub.Authorized == stub.Requests);
             Functional("Concise with the echo stub pastes what Clean pastes", cases.All(entry => entry.Styles.Single(style => style.Style == "Concise") is var concise && concise.Notice is null
                 && concise.Final == entry.Styles.Single(style => style.Style == "Clean").Final));
             if (!localPolishInstalled)
-                Functional("Local polish, not installed, falls back to Clean with a notice", cases.All(entry => entry.Styles.Single(style => style.Style == "LocalPolish") is var local
-                    && local.Final == entry.Styles.Single(style => style.Style == "Clean").Final && (string.IsNullOrWhiteSpace(local.Final) || local.Notice?.StartsWith("Used Clean") == true)));
+                Functional("Local polish, not installed, falls back to Clean with a notice, and pastes Clean without one in literal mode", cases.All(entry => entry.Styles.Single(style => style.Style == "LocalPolish") is var local
+                    && local.Final == entry.Styles.Single(style => style.Style == "Clean").Final
+                    && (literal.Contains(entry.Name) ? local.Notice is null : string.IsNullOrWhiteSpace(local.Final) || local.Notice?.StartsWith("Used Clean") == true)));
             Functional($"Keep speech model warm {(settings.KeepModelWarm ? "on keeps" : "off unloads")} the worker after a dictation", WhisperEngine.IsWarm == settings.KeepModelWarm);
             var flipped = settings.Snapshot(); flipped.KeepModelWarm = !settings.KeepModelWarm;
             var longest = suite.Cases.Where(entry => !entry.Clip.StartsWith("noise:", StringComparison.Ordinal)).MaxBy(entry => new FileInfo(entry.Clip).Length);

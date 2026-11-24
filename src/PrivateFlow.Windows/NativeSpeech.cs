@@ -23,6 +23,8 @@ internal sealed class NativeSpeech : IDisposable
 
     // The GPU memory when the model did not fit the free memory and loaded anyway; null otherwise.
     public GpuMemory? LowMemory { get; private set; }
+    // The CUDA backend loaded and found a GPU, so the model runs there; a blocked or missing backend leaves it on the processor.
+    public bool OnGpu { get; private set; }
 
     // canFallBack: the caller can wait or use a smaller model, so a model that does not fit the free GPU memory is refused.
     // loadingWithLowMemory hears, before the slow load starts, that the model loads anyway into too little free GPU memory.
@@ -184,6 +186,7 @@ internal sealed class NativeSpeech : IDisposable
     {
         var device = Marshal.GetDelegateForFunctionPointer<DeviceByType>(NativeLibrary.GetExport(backendLibrary, "ggml_backend_dev_by_type"))(GpuDeviceType);
         if (device == 0) return;
+        OnGpu = true;
         var baseLibrary = LoadRuntimeLibrary(System.IO.Path.Combine(directory, "ggml-base.dll"));
         nuint available, total;
         try { Marshal.GetDelegateForFunctionPointer<DeviceMemory>(NativeLibrary.GetExport(baseLibrary, "ggml_backend_dev_memory"))(device, out available, out total); }

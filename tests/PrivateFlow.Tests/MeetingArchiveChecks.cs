@@ -278,13 +278,25 @@ static class MeetingArchiveChecks
             var crashedWhileFinishing = Meeting("Finalizing", false, "mic-000000.wav");
             var previewOnly = Meeting("Interrupted", false);
             File.WriteAllText(Path.Combine(audioArchive.DirectoryFor(interrupted.Id), "notes.txt"), "not audio");
-            Check(audioArchive.DeleteLeftoverAudio() == 2 && audioArchive.AudioBytes(finished.Id) == 0 && audioArchive.AudioBytes(retained.Id) > 0 && audioArchive.AudioBytes(interrupted.Id) == 2 * (44 + 32000)
+            Check(audioArchive.DeleteLeftoverAudio(audioArchive.List()) == 2 && audioArchive.AudioBytes(finished.Id) == 0 && audioArchive.AudioBytes(retained.Id) > 0 && audioArchive.AudioBytes(interrupted.Id) == 2 * (44 + 32000)
                 && audioArchive.AudioBytes(crashedWhileRecording.Id) > 0 && audioArchive.AudioBytes(crashedWhileFinishing.Id) > 0,
                 "audio left in complete meetings without retention is deleted, including unfinished chunk writes; retained and unfinished meetings keep theirs");
             var unfinishedIds = audioArchive.Unfinished().Select(found => found.Document.Id).ToHashSet();
             Check(unfinishedIds.SetEquals([interrupted.Id, crashedWhileRecording.Id, crashedWhileFinishing.Id]) && !audioArchive.Unfinished(crashedWhileRecording.Id).Any(found => found.Document.Id == crashedWhileRecording.Id)
                 && audioArchive.Unfinished().Single(found => found.Document.Id == interrupted.Id).AudioBytes == 2 * (44 + 32000),
                 "interrupted meetings and those a crash left recording or finalizing are offered for finishing with their audio size; one without audio and the one recording now are not");
+            // The History page reads every meeting file once at start and passes the list on, so a meeting file damaged after that read changes
+            // nothing, where reading the files again would skip it.
+            var stored = audioArchive.List();
+            File.WriteAllBytes(Path.Combine(audioArchive.DirectoryFor(finished.Id), "mic-000002.wav"), Wave(32000));
+            var damaged = new[] { finished.Id, crashedWhileFinishing.Id }.Select(id => Path.Combine(audioArchive.DirectoryFor(id), "meeting.json")).ToDictionary(file => file, File.ReadAllText);
+            foreach (var file in damaged.Keys) File.WriteAllText(file, "{");
+            var fromStored = audioArchive.Unfinished(stored).Select(found => found.Document.Id).ToHashSet(); var reread = audioArchive.Unfinished().Select(found => found.Document.Id).ToHashSet();
+            var leftoverFromStored = audioArchive.DeleteLeftoverAudio(stored);
+            foreach (var (file, text) in damaged) File.WriteAllText(file, text);
+            Check(fromStored.SetEquals(unfinishedIds) && !reread.Contains(crashedWhileFinishing.Id) && audioArchive.Unfinished(stored, crashedWhileRecording.Id).All(found => found.Document.Id != crashedWhileRecording.Id)
+                && leftoverFromStored == 1 && audioArchive.AudioBytes(finished.Id) == 0 && audioArchive.AudioBytes(retained.Id) > 0,
+                "the unfinished meetings and the leftover audio come from the meetings already read, without reading a meeting file again");
             File.WriteAllBytes(Path.Combine(audioArchive.DirectoryFor(interrupted.Id), "mic-000002.wav.partial"), new byte[44 + 32000]);
             audioArchive.RecoverUnlistedChunks(interrupted);
             var recoveredChunks = audioArchive.Load(interrupted.Id).Chunks.Select(chunk => chunk.File).ToArray();
@@ -320,6 +332,25 @@ static class MeetingArchiveChecks
             var old = new MeetingDocument(); audioArchive.Save(old);
             File.WriteAllText(Path.Combine(audioArchive.DirectoryFor(old.Id), "meeting.json"), "{\"Id\":\"" + old.Id + "\",\"Status\":\"Interrupted\",\"Chunks\":[{\"File\":\"mic-000000.wav\",\"Channel\":\"mic\",\"Offset\":0,\"Duration\":1}],\"Segments\":[]}");
             Check(audioArchive.Load(old.Id) is { MicrophoneDevice: "", PlaybackDevice: "" } loadedOld && loadedOld.Chunks[0].Peak is null, "a meeting record from an earlier version loads without devices and levels");
+            // A channel's chunks read as one recording (ChannelAudio): two adjacent seconds, half a second of gap, then a second listed whose
+            // file a crash cut to 0.75 s. Every sample read, across each boundary and past the end, is the one its file holds, zero elsewhere.
+            var channelFolder = Path.Combine(audioRoot, "channel"); Directory.CreateDirectory(channelFolder);
+            var timeline = new short[56000];
+            (string File, double Offset, double Duration) ChannelChunk(string name, double offset, double duration, int samples)
+            {
+                var values = Enumerable.Range(0, samples).Select(index => (short)((name[^1] - '0' + 1) * 7919 + index * 13 % 30011 - 15000)).ToArray();
+                values.CopyTo(timeline, (int)(offset * 16000));
+                var file = Path.Combine(channelFolder, name + ".wav");
+                using (var writer = new NAudio.Wave.WaveFileWriter(file, new NAudio.Wave.WaveFormat(16000, 16, 1))) writer.WriteSamples(values, 0, values.Length);
+                return (file, offset, duration);
+            }
+            var second = ChannelChunk("mic-1", 1, 1, 16000); var cut = ChannelChunk("mic-2", 2.5, 1, 12000); var first = ChannelChunk("mic-0", 0, 1, 16000);
+            var channel = new PrivateFlow.Windows.ChannelAudio([second, cut, first]);
+            bool Reads(int start, int count) => channel.Read(start, count).SequenceEqual(Enumerable.Range(start, count).Select(index => index < timeline.Length ? timeline[index] / 32768f : 0f));
+            (int Start, int Count)[] reads = [(0, 56000), (15990, 20), (0, 16000), (31000, 10000), (33000, 4000), (50000, 8000), (60000, 100), (39999, 2)];
+            var wrongReads = reads.Where(read => !Reads(read.Start, read.Count)).ToArray();
+            Check(channel.Length == 56000 && wrongReads.Length == 0 && channel.Read(0.99, 1.01).SequenceEqual(channel.Read(15840, 320)),
+                $"a channel's chunks read as one recording across chunk boundaries, a gap and a file shorter than listed, the gap and the missing end as zeros (wrong: {string.Join(", ", wrongReads)})");
         }
         finally { Directory.Delete(audioRoot, true); }
     }

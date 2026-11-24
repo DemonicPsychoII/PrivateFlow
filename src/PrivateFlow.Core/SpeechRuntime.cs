@@ -50,6 +50,26 @@ public static class SpeechRuntime
     public static string GpuMemoryLowNote(GpuMemory memory) =>
         $"GPU memory was low ({Gigabytes(memory.Free)} of {Gigabytes(memory.Total)} GB free, about {Gigabytes(memory.Needed)} GB needed), so recognition may have been slower.";
 
+    // How long one request to the speech worker may take before the worker is stopped as hung. Only a final pass attempt that another
+    // model can still finish (otherModelLeft: the meeting model, before the speech model) gets a shorter limit, so a pass slowed down by
+    // other GPU work tries once more and then finishes with the speech model sooner. Every other request, such as a dictation's or the
+    // last model's, keeps five minutes, because stopping it leaves no text: a dictation whose model loaded into too little GPU memory
+    // runs many times slower and still finishes. Whisper encodes a whole 30 s window however short the request (AudioContext is not set)
+    // and decodes in step with the audio, and both take longer the larger the model, so the shorter limit grows with the model file times
+    // the window plus the audio. At full speed this took about 0.2 s per GB of model and second on a fast processor (20 s of speech:
+    // medium 14 s, base 1.6 s) and about 0.013 s on an 8 GB NVIDIA GPU (large-v3 with eight beams decoded 15.5 s in 1.8 s). The processor
+    // gets 100 times that, for slow processors, a busy PC (a test VM running a CI job took six times as long for a desktop step: 101.9 s)
+    // and the eight-beam final pass; base gets 1.5 to 3 minutes, medium and larger models the full five. The GPU gets 25 times that: about
+    // a minute for 30 s with large-v3, whose decode other work holding the GPU memory once slowed to 170 s, so such a pass falls back after
+    // about a minute instead of five. Every request gets at least half a minute and at most five minutes.
+    public static TimeSpan SpeechRequestLimit(double audioSeconds, long modelBytes, bool onGpu, bool otherModelLeft)
+    {
+        if (!otherModelLeft) return TimeSpan.FromMinutes(5);
+        const double WindowSeconds = 30, ProcessorSecondsPerGigabyte = 20, GpuSecondsPerGigabyte = 0.33;
+        var seconds = (onGpu ? GpuSecondsPerGigabyte : ProcessorSecondsPerGigabyte) * modelBytes / 1e9 * (WindowSeconds + Math.Max(0, audioSeconds));
+        return TimeSpan.FromSeconds(Math.Clamp(seconds, 30, 300));
+    }
+
     public static string Gigabytes(long bytes) => (bytes / 1e9).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
 
     // whisper.cpp's DLLs need the Microsoft Visual C++ 2015-2022 runtime (x64), which a fresh Windows lacks; Private Flow does not bring

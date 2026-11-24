@@ -123,8 +123,10 @@ public sealed partial class MeetingArchive
         VerifyTree(directory); Directory.Delete(directory, true);
     }
     // Meetings whose transcript is not final and whose audio is still on disk, so they can be finished; except the one recording now.
-    public IReadOnlyList<(MeetingDocument Document, long AudioBytes)> Unfinished(string? recordingId = null) =>
-        List().Where(document => document.Status != "Complete" && document.Id != recordingId).Select(document => (Document: document, AudioBytes: AudioBytes(document.Id)))
+    public IReadOnlyList<(MeetingDocument Document, long AudioBytes)> Unfinished(string? recordingId = null) => Unfinished(List(), recordingId);
+    // The same among meetings List() has just read, so the caller reads no meeting file again.
+    public IReadOnlyList<(MeetingDocument Document, long AudioBytes)> Unfinished(IEnumerable<MeetingDocument> documents, string? recordingId = null) =>
+        documents.Where(document => document.Status != "Complete" && document.Id != recordingId).Select(document => (Document: document, AudioBytes: AudioBytes(document.Id)))
             .Where(found => found.AudioBytes > 0).ToArray();
     public const string StoppedToFinishLater = "Stopped by you with Stop; finish later.";
     public const string FinishingCancelled = "Finishing was cancelled by you.";
@@ -158,10 +160,11 @@ public sealed partial class MeetingArchive
     private static readonly Regex AudioName = new(@"^(mic|system)-[0-9]{6}\.wav(\.partial)?$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     // Audio an earlier run left in meetings whose transcript is final and that do not retain audio, such as after a crash between
     // saving the transcript and deleting the audio. Unfinished meetings keep theirs until they are finished or the user deletes it.
-    public int DeleteLeftoverAudio()
+    // documents: the meetings as List() has just read them.
+    public int DeleteLeftoverAudio(IEnumerable<MeetingDocument> documents)
     {
         var deleted = 0;
-        foreach (var document in List().Where(document => document.Status == "Complete" && !document.RetainAudio))
+        foreach (var document in documents.Where(document => document.Status == "Complete" && !document.RetainAudio))
         {
             var files = AudioFiles(document.Id).ToArray();
             foreach (var file in files) File.Delete(file);

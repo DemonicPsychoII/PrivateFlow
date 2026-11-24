@@ -25,29 +25,32 @@ internal static class UpdateCheck
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+') is [_, var sha] && IsCommit(sha) ? sha : null;
     internal static bool IsCommit(string text) => text.Length == 40 && text.All(Uri.IsHexDigit);
 
-    public static async Task<UpdateOffer?> FindAsync(CancellationToken cancellation)
+    public static async Task<UpdateOffer?> FindAsync(CancellationToken cancellation) => (await CheckAsync(cancellation)).Offer;
+
+    // UpToDate only when the check read the newest release or build and it is not newer; a check that failed says neither.
+    public static async Task<(UpdateOffer? Offer, bool UpToDate)> CheckAsync(CancellationToken cancellation)
     {
         var server = UpdateServer.Read(Settings.Root);
         var readerToken = ReadCloudToken();
         if (!ReleaseUpdate.UsesServer(server, readerToken))
         {
             using var client = new HttpClient();
-            var release = await ReleaseUpdate.FindAsync(client, typeof(UpdateCheck).Assembly.GetName().Version!, cancellation);
-            return release is null ? null : new(release.Tag, release.Version, null, [], true);
+            var lookup = await ReleaseUpdate.LookupAsync(client, typeof(UpdateCheck).Assembly.GetName().Version!, cancellation);
+            return lookup.Package is { } release ? (new(release.Tag, release.Version, null, [], true), false) : (null, lookup.UpToDate);
         }
-        if (await LatestCloudBuildAsync(server!.CloudUrl, server.CloudWakeUrl, readerToken!, cancellation) is not { } latest) return null;
+        if (await LatestCloudBuildAsync(server!.CloudUrl, server.CloudWakeUrl, readerToken!, cancellation) is not { } latest) return (null, false);
         // Never a lower version (UpdateServer.Offers). Where the ancestry cannot be checked, without a source repository, in a release build,
         // or when the GitHub CLI does not answer, the build is offered on its version alone, without the changes it brings.
         var own = Commit;
-        if (!UpdateServer.Offers(latest.Version, latest.Commit, typeof(UpdateCheck).Assembly.GetName().Version!, own)) return null;
-        if (own is null || server.SourceRepository is not { } repository) return new UpdateOffer(latest.Commit, latest.Version, null, []);
+        if (!UpdateServer.Offers(latest.Version, latest.Commit, typeof(UpdateCheck).Assembly.GetName().Version!, own)) return (null, Version.TryParse(latest.Version, out var read) && read.Build >= 0);
+        if (own is null || server.SourceRepository is not { } repository) return (new UpdateOffer(latest.Commit, latest.Version, null, []), false);
         // ahead_by counts commits in the build that this copy lacks; a copy built from a newer
         // branch is not offered an older main build. Merge commits carry the PR titles.
         var compare = await GhAsync(cancellation, "api", $"repos/{repository}/compare/{own}...{latest.Commit}", "--jq",
             ".ahead_by, ([.commits[] | select((.parents | length) > 1)] | reverse | .[] | .commit.message | split(\"\\n\")[0])");
         var lines = compare?.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (lines is not [var behindText, ..] || !int.TryParse(behindText, out var behind)) return new UpdateOffer(latest.Commit, latest.Version, null, []);
-        return behind > 0 ? new UpdateOffer(latest.Commit, latest.Version, behind, lines[1..]) : null;
+        if (lines is not [var behindText, ..] || !int.TryParse(behindText, out var behind)) return (new UpdateOffer(latest.Commit, latest.Version, null, []), false);
+        return behind > 0 ? (new UpdateOffer(latest.Commit, latest.Version, behind, lines[1..]), false) : (null, true);
     }
 
     internal static async Task<CloudBuild?> LatestCloudBuildAsync(Uri cloudUrl, Uri? cloudWakeUrl, string readerToken, CancellationToken cancellation)
